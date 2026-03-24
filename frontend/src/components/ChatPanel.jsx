@@ -1,8 +1,19 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef } from 'react';
 import axios from 'axios';
 import { Send, ChevronDown, ChevronUp } from 'lucide-react';
 
-export default function ChatPanel({ onHighlightNodes }) {
+const NODE_COLORS = {
+    SalesOrder: '#3B82F6',
+    BusinessPartner: '#8B5CF6',
+    OutboundDelivery: '#10B981',
+    BillingDocument: '#F59E0B',
+    JournalEntry: '#EF4444',
+    Payment: '#06B6D4',
+    Product: '#F97316',
+    Plant: '#6B7280',
+};
+
+const ChatPanel = forwardRef(({ onHighlightNodes, graphNodes }, ref) => {
     const [messages, setMessages] = useState([
         {
             role: 'model',
@@ -21,18 +32,14 @@ export default function ChatPanel({ onHighlightNodes }) {
         scrollToBottom();
     }, [messages, isLoading]);
 
-    const handleSend = async () => {
-        if (!input.trim() || isLoading) return;
-
-        const userText = input.trim();
-        setInput('');
+    const sendQuery = async (userText) => {
+        if (!userText.trim() || isLoading) return;
 
         const newMessages = [...messages, { role: 'user', text: userText }];
         setMessages(newMessages);
         setIsLoading(true);
 
         try {
-            // get last 6 messages
             const historyMsg = messages.slice(-6).map(m => ({ role: m.role === 'model' ? 'model' : 'user', text: m.text }));
 
             const response = await axios.post('http://localhost:3001/api/chat', {
@@ -53,7 +60,7 @@ export default function ChatPanel({ onHighlightNodes }) {
             if (data.nodeIds && data.nodeIds.length > 0) {
                 onHighlightNodes(data.nodeIds);
             } else {
-                onHighlightNodes([]); // clear highlights if no nodes
+                onHighlightNodes([]);
             }
 
         } catch (error) {
@@ -67,6 +74,17 @@ export default function ChatPanel({ onHighlightNodes }) {
         }
     };
 
+    useImperativeHandle(ref, () => ({
+        sendMessage: (msg) => {
+            sendQuery(msg);
+        }
+    }));
+
+    const handleSend = () => {
+        sendQuery(input);
+        setInput('');
+    };
+
     const handleKeyDown = (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -76,7 +94,6 @@ export default function ChatPanel({ onHighlightNodes }) {
 
     return (
         <div className="flex flex-col h-full bg-slate-50 border-l border-slate-200">
-            {/* Header */}
             <div className="flex flex-col p-4 bg-white border-b border-slate-200">
                 <div className="flex items-center justify-between">
                     <h2 className="text-lg font-bold text-slate-800">Chat with Graph</h2>
@@ -85,10 +102,9 @@ export default function ChatPanel({ onHighlightNodes }) {
                 <p className="text-xs font-medium text-slate-500 uppercase tracking-widest mt-1">Order to Cash</p>
             </div>
 
-            {/* Messages */}
             <div className="flex-grow overflow-y-auto p-4 space-y-4">
                 {messages.map((msg, idx) => (
-                    <ChatMessage key={idx} message={msg} />
+                    <ChatMessage key={idx} message={msg} graphNodes={graphNodes} />
                 ))}
                 {isLoading && (
                     <div className="flex items-center space-x-1 p-3 bg-white border border-slate-200 rounded-2xl rounded-tl-sm self-start w-16 h-10 shadow-sm">
@@ -100,7 +116,6 @@ export default function ChatPanel({ onHighlightNodes }) {
                 <div ref={messagesEndRef} />
             </div>
 
-            {/* Input */}
             <div className="p-4 bg-white border-t border-slate-200">
                 <div className="relative flex items-end bg-slate-50 border border-slate-200 rounded-lg focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-transparent transition-all overflow-hidden">
                     <textarea
@@ -126,9 +141,9 @@ export default function ChatPanel({ onHighlightNodes }) {
             </div>
         </div>
     );
-}
+});
 
-function ChatMessage({ message }) {
+function ChatMessage({ message, graphNodes }) {
     const isUser = message.role === 'user';
     const [showSql, setShowSql] = useState(false);
 
@@ -159,6 +174,54 @@ function ChatMessage({ message }) {
                     </div>
                 )}
             </div>
+
+            {!isUser && message.nodeIds && message.nodeIds.length > 0 && graphNodes && (
+                <div className="mt-2 w-full max-w-[95%]">
+                    <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 ml-1">
+                        Referenced Entities
+                    </div>
+                    <div className="flex overflow-x-auto space-x-2 pb-2 scrollbar-thin scrollbar-thumb-slate-300 hide-scrollbar-on-mobile">
+                        {message.nodeIds.slice(0, 6).map(id => {
+                            const node = graphNodes.find(n => n.id === id);
+                            if (!node) return null;
+                            const color = NODE_COLORS[node.data.nodeType] || '#CBD5E1';
+                            return (
+                                <div key={id} style={{
+                                    minWidth: 160,
+                                    border: `1px solid ${color}`,
+                                    borderRadius: 8,
+                                    padding: '8px 12px',
+                                    fontSize: 11,
+                                    backgroundColor: 'white',
+                                    flexShrink: 0
+                                }}>
+                                    <div style={{
+                                        color: color,
+                                        fontWeight: 700,
+                                        fontSize: 10,
+                                        textTransform: 'uppercase'
+                                    }}>
+                                        {node.data.nodeType}
+                                    </div>
+                                    <div style={{ fontWeight: 600, marginTop: 2, color: '#1e293b', paddingBottom: 4 }}>
+                                        {node.data.label}
+                                    </div>
+                                    {Object.entries(node.data.meta || {})
+                                        .slice(0, 3)
+                                        .map(([k, v]) => (
+                                            <div key={k} style={{ color: '#6b7280', fontSize: 10, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                {k}: {v}
+                                            </div>
+                                        ))
+                                    }
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
+
+export default ChatPanel;

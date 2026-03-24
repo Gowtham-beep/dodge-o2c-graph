@@ -1,4 +1,4 @@
-import React, { useMemo, useEffect } from 'react';
+import React, { useMemo, useEffect, forwardRef, useImperativeHandle } from 'react';
 import {
     ReactFlow,
     Controls,
@@ -8,12 +8,12 @@ import {
     useEdgesState,
     Handle,
     Position,
-    MarkerType
+    MarkerType,
+    useReactFlow
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import dagre from '@dagrejs/dagre';
 
-const nodeColors = {
+const NODE_COLORS = {
     SalesOrder: '#3B82F6', // (blue)
     BusinessPartner: '#8B5CF6', // (purple)
     OutboundDelivery: '#10B981', // (green)
@@ -26,33 +26,50 @@ const nodeColors = {
 
 const CustomNode = ({ data, id, selected }) => {
     const isHighlighted = data.isHighlighted;
-    const nodeColor = nodeColors[data.nodeType] || '#CBD5E1';
+    const nodeColor = NODE_COLORS[data.nodeType] || '#CBD5E1';
+
+    const defaultStyle = {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        background: 'white',
+        border: `1px solid ${selected ? '#333' : '#e2e8f0'}`,
+        borderRadius: '20px',  // pill shape
+        padding: '4px 10px',
+        fontSize: '10px',
+        whiteSpace: 'nowrap',
+        cursor: 'pointer',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+        transition: 'all 0.2s ease',
+    };
+
+    const highlightedStyle = {
+        ...defaultStyle,
+        border: `2px solid ${nodeColor}`,
+        boxShadow: `0 0 0 3px ${nodeColor}40, 0 0 20px ${nodeColor}60`,
+        background: `${nodeColor}10`,
+        transform: 'scale(1.1)',
+        zIndex: 1000,
+    };
+
+    const currentStyle = isHighlighted ? highlightedStyle : defaultStyle;
 
     return (
-        <div
-            style={{
-                minWidth: '140px',
-                background: 'white',
-                border: isHighlighted
-                    ? '2px solid #F59E0B'
-                    : `1px solid ${selected ? '#333' : '#e2e8f0'}`,
-                borderRadius: '8px',
-                overflow: 'hidden',
-                boxShadow: isHighlighted
-                    ? '0 0 12px rgba(245,158,11,0.5)'
-                    : '0 2px 4px rgba(0,0,0,0.05)',
-            }}
-        >
+        <div style={currentStyle} className="nodrag">
             <Handle type="target" position={Position.Left} style={{ visibility: 'hidden' }} />
-            <div style={{ height: '4px', backgroundColor: nodeColor, width: '100%' }} />
-            <div style={{ padding: '8px 12px' }}>
-                <div style={{ fontSize: '10px', color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>
-                    {data.nodeType}
-                </div>
-                <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#0f172a' }}>
-                    {data.label}
-                </div>
-            </div>
+            <div style={{
+                width: 8, height: 8, borderRadius: '50%',
+                background: nodeColor,
+                flexShrink: 0
+            }} />
+            <span style={{
+                color: '#374151',
+                fontWeight: isHighlighted ? 700 : 500,
+                fontSize: isHighlighted ? '11px' : '10px',
+                transition: 'all 0.2s ease',
+            }}>
+                {data.label}
+            </span>
             <Handle type="source" position={Position.Right} style={{ visibility: 'hidden' }} />
         </div>
     );
@@ -62,49 +79,79 @@ const nodeTypes = {
     custom: CustomNode,
 };
 
-const getLayoutedElements = (nodes, edges, direction = 'LR') => {
-    const dagreGraph = new dagre.graphlib.Graph();
-    dagreGraph.setDefaultEdgeLabel(() => ({}));
+const getScatteredPosition = (index, total, nodeType) => {
+    const seed = index * 137.508;
+    const radius = 200 + (index % 5) * 120;
+    const angle = (index * 137.508 * Math.PI) / 180;
 
-    const nodeWidth = 160;
-    const nodeHeight = 60;
+    const typeOffsets = {
+        BusinessPartner: { x: 0, y: 0 },
+        SalesOrder: { x: 600, y: 0 },
+        OutboundDelivery: { x: 1200, y: -300 },
+        BillingDocument: { x: 1200, y: 300 },
+        JournalEntry: { x: 1800, y: 200 },
+        Payment: { x: 2400, y: 200 },
+        Product: { x: 600, y: 600 },
+        Plant: { x: 1200, y: -600 },
+    };
 
-    dagreGraph.setGraph({ rankdir: direction });
+    const offset = typeOffsets[nodeType] || { x: 0, y: 0 };
+    return {
+        x: offset.x + Math.cos(angle) * radius * 0.4 + (index % 10) * 20,
+        y: offset.y + Math.sin(angle) * radius * 0.4 + Math.floor(index / 10) * 80
+    };
+};
 
-    nodes.forEach((node) => {
-        dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight });
-    });
+const processLayout = (nodes, edges) => {
+    const typeCounts = {};
 
-    edges.forEach((edge) => {
-        dagreGraph.setEdge(edge.source, edge.target);
-    });
+    const positionedNodes = nodes.map((node) => {
+        const type = node.data?.nodeType || 'Unknown';
+        if (!typeCounts[type]) typeCounts[type] = 0;
 
-    dagre.layout(dagreGraph);
+        const index = typeCounts[type]++;
+        const total = nodes.length; // rough estimate
+        const position = getScatteredPosition(index, total, type);
 
-    const newNodes = nodes.map((node) => {
-        const nodeWithPosition = dagreGraph.node(node.id);
         return {
             ...node,
-            position: {
-                x: nodeWithPosition.x - nodeWidth / 2,
-                y: nodeWithPosition.y - nodeHeight / 2,
-            },
+            position,
             targetPosition: Position.Left,
             sourcePosition: Position.Right,
         };
     });
 
-    return { nodes: newNodes, edges };
+    return { nodes: positionedNodes, edges };
 };
 
-export default function GraphView({ nodes, edges, highlightedNodeIds, onNodeClick }) {
+const GraphViewInner = forwardRef(({ nodes, edges, highlightedNodeIds, onNodeClick }, ref) => {
     const [layoutedNodes, setLayoutedNodes, onNodesChange] = useNodesState([]);
     const [layoutedEdges, setLayoutedEdges, onEdgesChange] = useEdgesState([]);
+    const reactFlowInstance = useReactFlow();
+
+    useImperativeHandle(ref, () => ({
+        focusNodes: (nodeIds) => {
+            const targetNodes = reactFlowInstance.getNodes().filter(n => nodeIds.includes(n.id));
+            if (targetNodes.length === 0) return;
+
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            targetNodes.forEach(n => {
+                if (n.position.x < minX) minX = n.position.x;
+                if (n.position.y < minY) minY = n.position.y;
+                if (n.position.x + 120 > maxX) maxX = n.position.x + 120;
+                if (n.position.y + 40 > maxY) maxY = n.position.y + 40;
+            });
+
+            reactFlowInstance.fitBounds(
+                { x: minX, y: minY, width: maxX - minX, height: maxY - minY },
+                { duration: 800, padding: 0.3 }
+            );
+        }
+    }));
 
     useEffect(() => {
         if (!nodes.length) return;
 
-        // Apply highlighting
         const nodesWithHighlight = nodes.map(n => ({
             ...n,
             data: {
@@ -113,24 +160,13 @@ export default function GraphView({ nodes, edges, highlightedNodeIds, onNodeClic
             }
         }));
 
-        // Apply layout
-        const { nodes: repositionedNodes, edges: layoutedE } = getLayoutedElements(
+        const { nodes: repositionedNodes, edges: unformattedEdges } = processLayout(
             nodesWithHighlight,
-            edges,
-            'LR'
+            edges
         );
 
         setLayoutedNodes(repositionedNodes);
-
-        // Add default markers to edges
-        const formattedEdges = layoutedE.map(e => ({
-            ...e,
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
-            style: { stroke: '#94a3b8', strokeWidth: 1.5 },
-            animated: e.animated || false
-        }));
-
-        setLayoutedEdges(formattedEdges);
+        setLayoutedEdges(unformattedEdges);
     }, [nodes, edges, highlightedNodeIds, setLayoutedNodes, setLayoutedEdges]);
 
     return (
@@ -142,14 +178,34 @@ export default function GraphView({ nodes, edges, highlightedNodeIds, onNodeClic
                 onEdgesChange={onEdgesChange}
                 onNodeClick={(_, node) => onNodeClick(node)}
                 nodeTypes={nodeTypes}
-                fitView
-                minZoom={0.1}
+                fitView={true}
+                fitViewOptions={{ padding: 0.15 }}
+                minZoom={0.05}
+                maxZoom={3}
+                nodesDraggable={true}
+                panOnScroll={true}
+                defaultViewport={{ x: 0, y: 0, zoom: 0.5 }}
+                defaultEdgeOptions={{
+                    type: 'straight',
+                    style: {
+                        stroke: '#93c5fd',
+                        strokeWidth: 1,
+                        opacity: 0.5
+                    },
+                    markerEnd: {
+                        type: MarkerType.ArrowClosed,
+                        color: '#93c5fd',
+                        width: 8,
+                        height: 8
+                    }
+                }}
+                elementsSelectable={true}
             >
                 <Background variant="dots" gap={20} color="#e2e8f0" />
                 <Controls />
                 <MiniMap
                     nodeColor={(n) => {
-                        return nodeColors[n.data?.nodeType] || '#CBD5E1';
+                        return NODE_COLORS[n.data?.nodeType] || '#CBD5E1';
                     }}
                     maskColor="rgba(248, 250, 252, 0.7)"
                     style={{ border: '1px solid #e2e8f0', borderRadius: '8px' }}
@@ -157,4 +213,6 @@ export default function GraphView({ nodes, edges, highlightedNodeIds, onNodeClic
             </ReactFlow>
         </div>
     );
-}
+});
+
+export default GraphViewInner;
