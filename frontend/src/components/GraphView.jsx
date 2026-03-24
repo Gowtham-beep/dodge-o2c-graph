@@ -77,7 +77,12 @@ const CustomNode = ({ data, id, selected }) => {
 
     return (
         <div
-            style={currentStyle}
+            style={{
+                ...currentStyle,
+                position: 'relative',
+                overflow: 'visible',
+                zIndex: hovered ? 99999 : (isHighlighted ? 1000 : 1),
+            }}
             className="nodrag"
             onMouseEnter={() => setHovered(true)}
             onMouseLeave={() => setHovered(false)}
@@ -111,7 +116,8 @@ const CustomNode = ({ data, id, selected }) => {
                     minWidth: '220px',
                     maxWidth: '280px',
                     boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-                    zIndex: 9999,
+                    zIndex: 99999,
+                    isolation: 'isolate',
                     pointerEvents: 'none',
                     cursor: 'default',
                     textAlign: 'left'
@@ -292,9 +298,9 @@ const GraphViewInner = forwardRef(({ nodes, edges, highlightedNodeIds, onNodeCli
     }, [nodes, edges, highlightedNodeIds, setLayoutedNodes, setLayoutedEdges]);
 
     return (
-        <div style={{ width: '100%', height: '100%' }}>
+        <div style={{ width: '100%', height: '100%', position: 'relative' }}>
             <ReactFlow
-                style={{ overflow: 'visible' }}
+                style={{ width: '100%', height: '100%', overflow: 'visible' }}
                 edgesUpdatable={false}
                 nodes={layoutedNodes}
                 edges={layoutedEdges}
@@ -307,7 +313,13 @@ const GraphViewInner = forwardRef(({ nodes, edges, highlightedNodeIds, onNodeCli
                 minZoom={0.05}
                 maxZoom={3}
                 nodesDraggable={true}
-                panOnScroll={true}
+                panOnDrag={true}
+                panOnScroll={false}
+                zoomOnScroll={true}
+                zoomOnPinch={true}
+                nodesConnectable={false}
+                elementsSelectable={true}
+                preventScrolling={true}
                 defaultViewport={{ x: 0, y: 0, zoom: 0.5 }}
                 defaultEdgeOptions={{
                     type: 'straight',
@@ -326,7 +338,6 @@ const GraphViewInner = forwardRef(({ nodes, edges, highlightedNodeIds, onNodeCli
                         height: 8
                     }
                 }}
-                elementsSelectable={true}
             >
                 <Background variant="dots" gap={20} color="#e2e8f0" />
                 <Controls />

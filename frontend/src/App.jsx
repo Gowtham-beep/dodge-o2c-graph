@@ -1,19 +1,64 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { ReactFlowProvider } from '@xyflow/react';
+import { ReactFlowProvider, applyNodeChanges } from '@xyflow/react';
 import GraphView from './components/GraphView';
 import ChatPanel from './components/ChatPanel';
 import Legend from './components/Legend';
 
+const getScatteredPosition = (index, total, nodeType) => {
+  const typeOffsets = {
+    BusinessPartner: { x: 0, y: 500 },
+    SalesOrder: { x: 800, y: 500 },
+    OutboundDelivery: { x: 1600, y: 0 },
+    BillingDocument: { x: 1600, y: 1000 },
+    JournalEntry: { x: 2400, y: 800 },
+    Payment: { x: 3200, y: 800 },
+    Product: { x: 800, y: 1200 },
+    Plant: { x: 1600, y: -400 },
+  };
+  const offset = typeOffsets[nodeType] || { x: 0, y: 0 };
+  return {
+    x: offset.x + (index % 6) * 220,
+    y: offset.y + Math.floor(index / 6) * 120
+  };
+};
+
+const processLayoutNodes = (nodes) => {
+  const typeCounts = {};
+  return nodes.map((node) => {
+    const type = node.data?.nodeType || 'Unknown';
+    if (!typeCounts[type]) typeCounts[type] = 0;
+    const index = typeCounts[type]++;
+    return {
+      ...node,
+      position: getScatteredPosition(index, nodes.length, type),
+      targetPosition: 'left',
+      sourcePosition: 'right',
+    };
+  });
+};
+
 function App() {
   const [graphData, setGraphData] = useState({ nodes: [], edges: [] });
+  const [nodes, setNodes] = useState([]);
+  const [visibleTypes, setVisibleTypes] = useState([
+    'BusinessPartner', 'SalesOrder', 'OutboundDelivery',
+    'BillingDocument', 'JournalEntry', 'Payment'
+  ]);
   const [highlightedNodeIds, setHighlightedNodeIds] = useState([]);
+  const [highlightedEdgeIds, setHighlightedEdgeIds] = useState([]);
+  const [granularOverlay, setGranularOverlay] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showToast, setShowToast] = useState(false);
 
   const graphRef = useRef(null);
   const chatPanelRef = useRef(null);
+
+  const onNodesChange = useCallback(
+    (changes) => setNodes((nds) => applyNodeChanges(changes, nds)),
+    []
+  );
 
   useEffect(() => {
     const fetchGraph = async () => {
@@ -32,8 +77,22 @@ function App() {
     fetchGraph();
   }, []);
 
+  useEffect(() => {
+    if (graphData.nodes.length > 0) {
+      const filtered = graphData.nodes.filter(n =>
+        visibleTypes.includes(n.data.nodeType)
+      );
+      setNodes(processLayoutNodes(filtered));
+    }
+  }, [graphData, visibleTypes]);
+
   const handleHighlightNodes = (ids) => {
     setHighlightedNodeIds(ids);
+    const relatedEdges = graphData.edges.filter(e =>
+      ids.includes(e.source) && ids.includes(e.target)
+    );
+    setHighlightedEdgeIds(relatedEdges.map(e => e.id));
+
     if (ids.length > 0) {
       setTimeout(() => {
         graphRef.current?.focusNodes(ids);
@@ -99,19 +158,78 @@ function App() {
             </div>
           </div>
 
-          {!isLoading && !error && (
-            <ReactFlowProvider>
-              <GraphView
-                ref={graphRef}
-                nodes={graphData.nodes}
-                edges={graphData.edges}
-                highlightedNodeIds={highlightedNodeIds}
-                onNodeClick={handleNodeClick}
-              />
-            </ReactFlowProvider>
-          )}
+          {!isLoading && !error && (() => {
+            const filteredEdges = graphData.edges.filter(e => {
+              const sourceExists = nodes.some(n => n.id === e.source);
+              const targetExists = nodes.some(n => n.id === e.target);
+              return sourceExists && targetExists;
+            });
+            const enrichedEdges = filteredEdges.map(e => ({
+              ...e,
+              type: 'custom',
+              data: {
+                isHighlighted: highlightedEdgeIds.includes(e.id),
+                anyHighlighted: highlightedEdgeIds.length > 0
+              }
+            }));
 
-          {!isLoading && !error && <Legend />}
+            return (
+              <ReactFlowProvider>
+                <div style={{
+                  position: 'absolute',
+                  top: 12,
+                  left: 12,
+                  zIndex: 1000,
+                  display: 'flex',
+                  gap: '8px'
+                }}>
+                  <button
+                    onClick={() => setGranularOverlay(g => !g)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 12px',
+                      background: granularOverlay ? '#1e293b' : 'white',
+                      color: granularOverlay ? 'white' : '#1e293b',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    <span>{granularOverlay ? '⊞' : '⊟'}</span>
+                    {granularOverlay ? 'Hide Granular Overlay' : 'Show Granular Overlay'}
+                  </button>
+                </div>
+                <GraphView
+                  ref={graphRef}
+                  nodes={nodes}
+                  edges={enrichedEdges}
+                  onNodesChange={onNodesChange}
+                  highlightedNodeIds={highlightedNodeIds}
+                  granularOverlay={granularOverlay}
+                  onNodeClick={handleNodeClick}
+                />
+              </ReactFlowProvider>
+            );
+          })()}
+
+          {!isLoading && !error && (
+            <Legend
+              visibleTypes={visibleTypes}
+              onToggle={(nodeType) => {
+                setVisibleTypes(prev =>
+                  prev.includes(nodeType)
+                    ? prev.filter(t => t !== nodeType)
+                    : [...prev, nodeType]
+                );
+              }}
+            />
+          )}
         </div>
 
         <div className="w-[380px] h-full flex-shrink-0 z-10 relative shadow-[-4px_0_15px_rgba(0,0,0,0.03)]">
@@ -119,6 +237,7 @@ function App() {
             ref={chatPanelRef}
             onHighlightNodes={handleHighlightNodes}
             graphNodes={graphData.nodes}
+            granularOverlay={granularOverlay}
           />
         </div>
       </div>
