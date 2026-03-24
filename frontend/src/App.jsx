@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import { ReactFlowProvider, applyNodeChanges } from '@xyflow/react';
 import GraphView from './components/GraphView';
@@ -7,19 +7,24 @@ import Legend from './components/Legend';
 
 const getScatteredPosition = (index, total, nodeType) => {
   const typeOffsets = {
-    BusinessPartner: { x: 0, y: 500 },
-    SalesOrder: { x: 800, y: 500 },
-    OutboundDelivery: { x: 1600, y: 0 },
-    BillingDocument: { x: 1600, y: 1000 },
-    JournalEntry: { x: 2400, y: 800 },
-    Payment: { x: 3200, y: 800 },
-    Product: { x: 800, y: 1200 },
-    Plant: { x: 1600, y: -400 },
+    BusinessPartner: { x: 0, y: 800 },
+    SalesOrder: { x: 1400, y: 800 },
+    OutboundDelivery: { x: 2800, y: 200 },
+    BillingDocument: { x: 2800, y: 1600 },
+    JournalEntry: { x: 4200, y: 1200 },
+    Payment: { x: 5600, y: 1200 },
+    Product: { x: 1400, y: 1800 },
+    Plant: { x: 2800, y: -400 },
   };
+
+  const COLS = 5;
+  const COL_GAP = 280;
+  const ROW_GAP = 160;
+
   const offset = typeOffsets[nodeType] || { x: 0, y: 0 };
   return {
-    x: offset.x + (index % 6) * 220,
-    y: offset.y + Math.floor(index / 6) * 120
+    x: offset.x + (index % COLS) * COL_GAP,
+    y: offset.y + Math.floor(index / COLS) * ROW_GAP
   };
 };
 
@@ -51,14 +56,42 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showToast, setShowToast] = useState(false);
+  const [chatWidth, setChatWidth] = useState(380);
+  const [isResizing, setIsResizing] = useState(false);
 
   const graphRef = useRef(null);
   const chatPanelRef = useRef(null);
+  const containerRef = useRef(null);
 
   const onNodesChange = useCallback(
     (changes) => setNodes((nds) => applyNodeChanges(changes, nds)),
     []
   );
+
+  useEffect(() => {
+    const handleMouseMove = (e) => {
+      if (!isResizing || !containerRef.current) return;
+      const containerRect = containerRef.current.getBoundingClientRect();
+      const newChatWidth = containerRect.right - e.clientX;
+      setChatWidth(Math.min(600, Math.max(280, newChatWidth)));
+    };
+
+    const handleMouseUp = () => setIsResizing(false);
+
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.userSelect = 'none';
+      document.body.style.cursor = 'col-resize';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+  }, [isResizing]);
 
   useEffect(() => {
     const fetchGraph = async () => {
@@ -77,28 +110,74 @@ function App() {
     fetchGraph();
   }, []);
 
-  useEffect(() => {
-    if (graphData.nodes.length > 0) {
-      const filtered = graphData.nodes.filter(n =>
-        visibleTypes.includes(n.data.nodeType)
-      );
-      setNodes(processLayoutNodes(filtered));
-    }
-  }, [graphData, visibleTypes]);
+  const filteredNodes = useMemo(() =>
+    graphData.nodes.filter(n =>
+      visibleTypes.includes(n.data.nodeType)
+    ),
+    [graphData.nodes, visibleTypes]
+  );
 
-  const handleHighlightNodes = (ids) => {
-    setHighlightedNodeIds(ids);
+  const filteredEdges = useMemo(() =>
+    graphData.edges.filter(e => {
+      const sourceExists = filteredNodes.some(n => n.id === e.source);
+      const targetExists = filteredNodes.some(n => n.id === e.target);
+      return sourceExists && targetExists;
+    }),
+    [graphData.edges, filteredNodes]
+  );
+
+  const enrichedEdges = useMemo(() =>
+    filteredEdges.map(e => ({
+      ...e,
+      type: 'custom',
+      data: {
+        isHighlighted: highlightedEdgeIds.includes(e.id),
+        anyHighlighted: highlightedEdgeIds.length > 0,
+        label: e.label,
+        granularOverlay
+      }
+    })),
+    [filteredEdges, highlightedEdgeIds, granularOverlay]
+  );
+
+  useEffect(() => {
+    if (filteredNodes.length > 0) {
+      setNodes(processLayoutNodes(filteredNodes));
+    } else {
+      setNodes([]);
+    }
+  }, [filteredNodes]);
+
+  const onHighlightNodes = useCallback((nodeIds) => {
+    const matchedIds = nodeIds.filter(id =>
+      graphData.nodes.some(n => n.id === id)
+    );
+
+    setHighlightedNodeIds(matchedIds);
+
     const relatedEdges = graphData.edges.filter(e =>
-      ids.includes(e.source) && ids.includes(e.target)
+      matchedIds.includes(e.source) &&
+      matchedIds.includes(e.target)
     );
     setHighlightedEdgeIds(relatedEdges.map(e => e.id));
 
-    if (ids.length > 0) {
+    if (matchedIds.length > 0) {
+      const typesNeeded = graphData.nodes
+        .filter(n => matchedIds.includes(n.id))
+        .map(n => n.data.nodeType);
+
+      setVisibleTypes(prev => {
+        const newTypes = new Set([...prev, ...typesNeeded]);
+        return [...newTypes];
+      });
+    }
+
+    if (matchedIds.length > 0 && graphRef.current) {
       setTimeout(() => {
-        graphRef.current?.focusNodes(ids);
+        graphRef.current.focusNodes(matchedIds);
       }, 100);
     }
-  };
+  }, [graphData]);
 
   const handleNodeClick = (node) => {
     if (chatPanelRef.current) {
@@ -134,8 +213,8 @@ function App() {
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden relative">
-        <div className="relative flex-grow h-full bg-slate-50">
+      <div ref={containerRef} style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }} className="bg-slate-50">
           {isLoading && (
             <div className="absolute inset-0 flex flex-col items-center justify-center z-20 bg-slate-50/80 backdrop-blur-sm">
               <div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
@@ -159,20 +238,6 @@ function App() {
           </div>
 
           {!isLoading && !error && (() => {
-            const filteredEdges = graphData.edges.filter(e => {
-              const sourceExists = nodes.some(n => n.id === e.source);
-              const targetExists = nodes.some(n => n.id === e.target);
-              return sourceExists && targetExists;
-            });
-            const enrichedEdges = filteredEdges.map(e => ({
-              ...e,
-              type: 'custom',
-              data: {
-                isHighlighted: highlightedEdgeIds.includes(e.id),
-                anyHighlighted: highlightedEdgeIds.length > 0
-              }
-            }));
-
             return (
               <ReactFlowProvider>
                 <div style={{
@@ -204,6 +269,29 @@ function App() {
                     <span>{granularOverlay ? '⊞' : '⊟'}</span>
                     {granularOverlay ? 'Hide Granular Overlay' : 'Show Granular Overlay'}
                   </button>
+                  <button
+                    onClick={() => {
+                      setHighlightedNodeIds([]);
+                      setHighlightedEdgeIds([]);
+                    }}
+                    style={{
+                      padding: '6px 12px',
+                      background: highlightedNodeIds.length > 0
+                        ? '#FEF3C7' : 'white',
+                      color: '#92400E',
+                      border: '1px solid #F59E0B',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      display: highlightedNodeIds.length > 0
+                        ? 'flex' : 'none',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    ✕ Clear highlights ({highlightedNodeIds.length})
+                  </button>
                 </div>
                 <GraphView
                   ref={graphRef}
@@ -232,10 +320,31 @@ function App() {
           )}
         </div>
 
-        <div className="w-[380px] h-full flex-shrink-0 z-10 relative shadow-[-4px_0_15px_rgba(0,0,0,0.03)]">
+        <div
+          onMouseDown={(e) => {
+            e.preventDefault();
+            setIsResizing(true);
+          }}
+          style={{
+            width: '4px',
+            background: isResizing ? '#3B82F6' : '#e2e8f0',
+            cursor: 'col-resize',
+            flexShrink: 0,
+            transition: 'background 0.2s',
+            position: 'relative',
+            zIndex: 10,
+          }}
+          onMouseEnter={e => e.currentTarget.style.background = '#3B82F6'}
+          onMouseLeave={e => {
+            if (!isResizing)
+              e.currentTarget.style.background = '#e2e8f0';
+          }}
+        />
+
+        <div style={{ width: chatWidth, flexShrink: 0 }} className="h-full z-10 relative shadow-[-4px_0_15px_rgba(0,0,0,0.03)]">
           <ChatPanel
             ref={chatPanelRef}
-            onHighlightNodes={handleHighlightNodes}
+            onHighlightNodes={onHighlightNodes}
             graphNodes={graphData.nodes}
             granularOverlay={granularOverlay}
           />

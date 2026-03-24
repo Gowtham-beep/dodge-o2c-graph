@@ -159,22 +159,38 @@ No nested JSON strings — if the answer contains quotes, escape them properly.
 The sql field must be a single-line string with no line breaks inside it.
 `;
 
-function extractNodeIds(results) {
-  const nodeIdsSet = new Set();
-  const fieldsToScan = [
+function extractNodeIds(results, answerText) {
+  const ids = new Set()
+
+  // Extract from SQL results
+  const idFields = [
     'salesOrder', 'billingDocument', 'deliveryDocument',
-    'accountingDocument', 'businessPartner', 'product', 'plant'
-  ];
+    'accountingDocument', 'businessPartner', 'product',
+    'plant', 'material', 'invoiceReference',
+    'referenceSdDocument', 'soldToParty', 'customer',
+    'referenceDocument', 'clearingAccountingDocument'
+  ]
 
   results.forEach(row => {
-    fieldsToScan.forEach(field => {
-      if (row[field] !== undefined && row[field] !== null) {
-        nodeIdsSet.add(row[field]);
+    idFields.forEach(field => {
+      if (row[field] && row[field] !== '') {
+        ids.add(String(row[field]))
       }
-    });
-  });
+    })
+  })
 
-  return Array.from(nodeIdsSet);
+  // Extract ENTITY_IDS line from answer text
+  if (answerText) {
+    const match = answerText.match(/ENTITY_IDS:\s*([^\n]+)/)
+    if (match) {
+      match[1].split(',').forEach(id => {
+        const trimmed = id.trim()
+        if (trimmed) ids.add(trimmed)
+      })
+    }
+  }
+
+  return [...ids]
 }
 
 function sanitizeSQL(sql) {
@@ -295,12 +311,19 @@ export async function handleChat(userMessage, history, client) {
     const results = queryResult.rows || [];
     console.log(`Query returned ${results.length} rows`);
 
-    let nodeIds = extractNodeIds(results);
+    // Extracted later
     const limitedResults = results.slice(0, 50);
 
     const followUpMessage = `The SQL query returned ${results.length} rows. Here are the results:
 ${String(JSON.stringify(limitedResults))}
-Based on these actual results, write a clear 2-3 sentence business-friendly answer. Be specific with numbers and names. Respond directly with the text of your answer, do not use JSON.`;
+Based on these actual results, write a clear 2-3 sentence business-friendly answer. Be specific with numbers and names. 
+At the end of your answer, add a line:
+ENTITY_IDS: [comma separated list of all entity IDs mentioned, including salesOrder, billingDocument, deliveryDocument, accountingDocument, businessPartner, product, plant, customer IDs]
+
+Example:
+ENTITY_IDS: 90504243, 9400000244, 740556, 80738099
+
+Respond directly with the text of your answer, do not use JSON.`;
 
     const followUpCompletion = await groq.chat.completions.create({
       model: model,
@@ -313,9 +336,15 @@ Based on these actual results, write a clear 2-3 sentence business-friendly answ
 
     const answer = followUpCompletion.choices[0].message.content;
 
+    let nodeIds = extractNodeIds(results, answer);
+
+    const cleanAnswer = answer
+      .replace(/ENTITY_IDS:.*$/m, '')
+      .trim();
+
     return {
       sql: parsed.sql,
-      answer: answer,
+      answer: cleanAnswer,
       results: results,
       nodeIds: nodeIds
     };

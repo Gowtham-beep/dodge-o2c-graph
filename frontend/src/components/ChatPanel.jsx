@@ -38,6 +38,7 @@ const ChatPanel = forwardRef(({ onHighlightNodes, graphNodes }, ref) => {
         const newMessages = [...messages, { role: 'user', text: userText }];
         setMessages(newMessages);
         setIsLoading(true);
+        onHighlightNodes([]);
 
         try {
             const historyMsg = messages.slice(-6).map(m => ({ role: m.role === 'model' ? 'model' : 'user', text: m.text }));
@@ -151,8 +152,8 @@ function ChatMessage({ message, graphNodes }) {
         <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
             <div
                 className={`max-w-[85%] p-3 text-sm leading-relaxed shadow-sm ${isUser
-                        ? 'bg-slate-800 text-white rounded-2xl rounded-tr-sm'
-                        : 'bg-white text-slate-800 border border-slate-200 rounded-2xl rounded-tl-sm'
+                    ? 'bg-slate-800 text-white rounded-2xl rounded-tr-sm'
+                    : 'bg-white text-slate-800 border border-slate-200 rounded-2xl rounded-tl-sm'
                     }`}
             >
                 <div className="whitespace-pre-wrap">{message.text}</div>

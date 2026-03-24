@@ -1,4 +1,5 @@
 import React, { useState, forwardRef, useImperativeHandle } from 'react';
+import { createPortal } from 'react-dom';
 import {
     ReactFlow,
     Controls,
@@ -45,6 +46,7 @@ const NODE_COLORS = {
 
 const CustomNode = ({ data, id, selected }) => {
     const [hovered, setHovered] = useState(false);
+    const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
     const { isHighlighted, granularOverlay } = data;
     const nodeColor = NODE_COLORS[data.nodeType] || '#CBD5E1';
 
@@ -87,7 +89,13 @@ const CustomNode = ({ data, id, selected }) => {
                 zIndex: hovered ? 99999 : (isHighlighted ? 1000 : 1),
             }}
             className="nodrag"
-            onMouseEnter={() => setHovered(true)}
+            onMouseEnter={(e) => {
+                setHovered(true);
+                setMousePos({ x: e.clientX, y: e.clientY });
+            }}
+            onMouseMove={(e) => {
+                setMousePos({ x: e.clientX, y: e.clientY });
+            }}
             onMouseLeave={() => setHovered(false)}
         >
             <Handle type="target" position={Position.Left} style={{ visibility: 'hidden' }} />
@@ -106,20 +114,19 @@ const CustomNode = ({ data, id, selected }) => {
             </span>
             <Handle type="source" position={Position.Right} style={{ visibility: 'hidden' }} />
 
-            {hovered && (
+            {hovered && createPortal(
                 <div style={{
-                    position: 'absolute',
-                    bottom: 'calc(100% + 8px)',
-                    left: '50%',
-                    transform: 'translateX(-50%)',
+                    position: 'fixed',
+                    left: mousePos.x + 12,
+                    top: mousePos.y - 10,
                     background: 'white',
                     border: '1px solid #e2e8f0',
                     borderRadius: '8px',
                     padding: '12px',
                     minWidth: '220px',
                     maxWidth: '280px',
-                    boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-                    zIndex: 99999,
+                    boxShadow: '0 8px 30px rgba(0,0,0,0.15)',
+                    zIndex: 999999,
                     isolation: 'isolate',
                     pointerEvents: 'none',
                     cursor: 'default',
@@ -133,15 +140,22 @@ const CustomNode = ({ data, id, selected }) => {
                         paddingBottom: '8px',
                         borderBottom: '1px solid #f1f5f9'
                     }}>
-                        <span style={{
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            color: nodeColor,
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.05em'
-                        }}>
-                            {data.nodeType}
-                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <div style={{
+                                width: 8, height: 8, borderRadius: '50%',
+                                background: nodeColor,
+                                flexShrink: 0
+                            }} />
+                            <span style={{
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                color: nodeColor,
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.05em'
+                            }}>
+                                {data.nodeType}
+                            </span>
+                        </div>
                         {granularOverlay && (
                             <span style={{
                                 fontSize: '10px',
@@ -166,7 +180,7 @@ const CustomNode = ({ data, id, selected }) => {
                     {granularOverlay && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                             {Object.entries(data.meta || {})
-                                .filter(([k, v]) => v !== null && v !== '' && k !== 'id')
+                                .filter(([k, v]) => v !== null && v !== '' && v !== undefined && k !== 'id')
                                 .slice(0, 6)
                                 .map(([key, value]) => (
                                     <div key={key} style={{
@@ -185,7 +199,7 @@ const CustomNode = ({ data, id, selected }) => {
                                         <span style={{
                                             color: '#1e293b',
                                             textAlign: 'right',
-                                            maxWidth: '140px',
+                                            maxWidth: '150px',
                                             overflow: 'hidden',
                                             textOverflow: 'ellipsis',
                                             whiteSpace: 'nowrap'
@@ -221,7 +235,8 @@ const CustomNode = ({ data, id, selected }) => {
                             Click to analyze in chat
                         </div>
                     )}
-                </div>
+                </div>,
+                document.body
             )}
         </div>
     );
@@ -273,9 +288,9 @@ const CustomEdge = ({
                     stroke,
                     strokeWidth,
                     opacity,
-                    transition: 'all 0.2s'
+                    transition: 'all 0.2s',
+                    strokeDasharray: isHighlighted ? '6 3' : 'none'
                 }}
-                className={isHighlighted ? 'animated-edge' : ''}
             />
             {showLabel && label && (
                 <EdgeLabelRenderer>
