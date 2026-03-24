@@ -177,6 +177,19 @@ function extractNodeIds(results, answerText) {
         ids.add(String(row[field]))
       }
     })
+
+    // Specifically handle material → product node ID
+    if (row['material']) ids.add(String(row['material']))
+
+    // Also check if any value matches a known pattern
+    // Product IDs start with S89 or B89 in this dataset
+    Object.values(row).forEach(val => {
+      if (val && typeof val === 'string') {
+        if (val.startsWith('S89') || val.startsWith('B89')) {
+          ids.add(val)
+        }
+      }
+    })
   })
 
   // Extract ENTITY_IDS line from answer text
