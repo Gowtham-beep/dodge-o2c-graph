@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import Groq from 'groq-sdk';
 
 const SYSTEM_PROMPT = `
 You are a data analyst for a SAP Order-to-Cash ERP system.
@@ -68,11 +68,53 @@ STRICT RULES:
    {"sql": "SELECT ...", "answer": "Brief explanation of what the query does"}
 
 3. Never fabricate data. All answers must be based on SQL results.
-4. All column names are camelCase and case-sensitive. Always quote them: "columnName"
-5. Always add LIMIT 100 unless the query is a COUNT or aggregation.
-6. For broken flow detection:
+4. Always add LIMIT 100 unless the query is a COUNT or aggregation.
+5. For broken flow detection:
    - Delivered not billed: overallDeliveryStatus='C' AND overallOrdReltdBillgStatus != 'C'
    - Billed not delivered: overallOrdReltdBillgStatus='C' AND overallDeliveryStatus != 'C'
+
+CRITICAL SQL RULES — violations will cause runtime errors:
+0. Every camelCase identifier must be double-quoted. No exceptions.
+
+0b. Every ID value compared with = must be single-quoted since all IDs are stored as TEXT.
+    Example: WHERE "billingDocument" = '90504238'
+    Never: WHERE "billingDocument" = 90504238
+
+1. ALL column names MUST be double-quoted: "columnName"
+   CORRECT: WHERE "billingDocument" = '90504238'
+   WRONG:   WHERE billingDocument = 90504238
+   
+2. ALL string values MUST be single-quoted: 'value'
+   IDs are always TEXT type, never integers.
+   CORRECT: WHERE "salesOrder" = '740506'
+   WRONG:   WHERE "salesOrder" = 740506
+
+3. Table aliases are fine but column names still need quotes:
+   CORRECT: t1."billingDocument"
+   WRONG:   t1.billingDocument
+
+4. For material/product queries, billing_document_items 
+   already has a "material" column. Use it directly:
+   SELECT "material", COUNT("billingDocument") as count 
+   FROM billing_document_items 
+   GROUP BY "material" ORDER BY count DESC LIMIT 10
+
+5. For node-specific queries like "Tell me about BillingDocument X":
+   SELECT * FROM billing_document_headers 
+   WHERE "billingDocument" = 'X' LIMIT 1
+   
+   For OutboundDelivery:
+   SELECT * FROM outbound_delivery_headers 
+   WHERE "deliveryDocument" = 'X' LIMIT 1
+   
+   For SalesOrder:
+   SELECT * FROM sales_order_headers 
+   WHERE "salesOrder" = 'X' LIMIT 1
+
+CRITICAL: Your response must be a single JSON object only.
+No text before or after the JSON.
+No nested JSON strings — if the answer contains quotes, escape them properly.
+The sql field must be a single-line string with no line breaks inside it.
 `;
 
 function extractNodeIds(results) {
@@ -93,30 +135,96 @@ function extractNodeIds(results) {
   return Array.from(nodeIdsSet);
 }
 
+function sanitizeSQL(sql) {
+  if (!sql) return sql;
+
+  // Fix camelCase columns that are unquoted
+  // Simple approach: quote any camelCase word (has uppercase 
+  // letter after lowercase) that isn't already quoted
+  let fixed = sql.replace(/\b([a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*)\b/g, (match, p1, offset, string) => {
+    // Check if already inside double quotes by looking at char before
+    const before = string[offset - 1];
+    const after = string[offset + match.length];
+    if (before === '"' || after === '"') return match;
+    return `"${match}"`;
+  });
+
+  return fixed;
+}
+
+function parseJSON(text) {
+  // Step 1: Remove markdown fences
+  let cleaned = text
+    .replace(/```json/gi, '')
+    .replace(/```/g, '')
+    .trim();
+
+  // Step 2: Try direct parse first
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) { }
+
+  // Step 3: Extract first { ... } block
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1) {
+    try {
+      return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+    } catch (e) { }
+  }
+
+  // Step 4: If all parsing fails, treat entire response 
+  // as a plain answer with no SQL
+  return { sql: null, answer: cleaned };
+}
+
 export async function handleChat(userMessage, history, client) {
   try {
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
-      systemInstruction: SYSTEM_PROMPT,
-      generationConfig: {
-        responseMimeType: "application/json",
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    const model = 'llama-3.3-70b-versatile';
+
+    let messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+
+    if (history && history.length > 0) {
+      let mapped = history.map(msg => ({
+        role: msg.role === 'user' ? 'user' : 'assistant',
+        content: msg.text
+      }));
+
+      // Strip leading assistant messages
+      while (mapped.length > 0 && mapped[0].role === 'assistant') {
+        mapped.shift();
       }
+
+      // Ensure alternating roles for Groq
+      let validHistory = [];
+      let expectedRole = 'user';
+      for (const msg of mapped) {
+        if (msg.role === expectedRole) {
+          validHistory.push(msg);
+          expectedRole = expectedRole === 'user' ? 'assistant' : 'user';
+        }
+      }
+
+      // If ends with user, remove last to allow the final user message to be user
+      if (validHistory.length > 0 && validHistory[validHistory.length - 1].role === 'user') {
+        validHistory.pop();
+      }
+
+      messages = messages.concat(validHistory);
+    }
+
+    messages.push({ role: 'user', content: userMessage });
+
+    const completion = await groq.chat.completions.create({
+      model: model,
+      messages: messages,
+      temperature: 0.1,
+      max_tokens: 1024,
     });
 
-    const formattedHistory = (history || []).map(msg => ({
-      role: msg.role === 'user' ? 'user' : 'model',
-      parts: [{ text: msg.text }]
-    }));
-
-    const chat = model.startChat({
-      history: formattedHistory
-    });
-
-    const result = await chat.sendMessage(userMessage);
-    const responseText = result.response.text();
-    const cleanText = responseText.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(cleanText);
+    const responseText = completion.choices[0].message.content;
+    const parsed = parseJSON(responseText);
 
     if (!parsed.sql) {
       return {
@@ -127,27 +235,35 @@ export async function handleChat(userMessage, history, client) {
       };
     }
 
-    const sqlRes = await client.query(parsed.sql);
-    let fullResults = sqlRes.rows;
-    let nodeIds = extractNodeIds(fullResults);
+    const sanitizedSQL = sanitizeSQL(parsed.sql);
+    console.log('Executing SQL:', sanitizedSQL);
 
-    const limitedResults = fullResults.slice(0, 50);
+    const queryResult = await client.query(sanitizedSQL);
+    const results = queryResult.rows || [];
+    console.log(`Query returned ${results.length} rows`);
 
-    const followUpMessage = `The SQL query returned ${fullResults.length} rows. Here are the results:
+    let nodeIds = extractNodeIds(results);
+    const limitedResults = results.slice(0, 50);
+
+    const followUpMessage = `The SQL query returned ${results.length} rows. Here are the results:
 ${String(JSON.stringify(limitedResults))}
 Based on these actual results, write a clear 2-3 sentence business-friendly answer. Be specific with numbers and names. Respond directly with the text of your answer, do not use JSON.`;
 
-    // Follow-up chat model without strict json
-    const followUpModel = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
+    const followUpCompletion = await groq.chat.completions.create({
+      model: model,
+      messages: [
+        { role: 'system', content: 'You are a business data analyst.' },
+        { role: 'user', content: followUpMessage }
+      ],
+      temperature: 0.1,
     });
-    const followUpRes = await followUpModel.generateContent(followUpMessage);
-    const answer = followUpRes.response.text();
+
+    const answer = followUpCompletion.choices[0].message.content;
 
     return {
       sql: parsed.sql,
       answer: answer,
-      results: fullResults,
+      results: results,
       nodeIds: nodeIds
     };
 
