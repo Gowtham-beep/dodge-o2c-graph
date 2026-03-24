@@ -48,51 +48,79 @@ function App() {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-white text-slate-900 font-sans">
-      <div className="relative flex-grow h-full bg-slate-50">
-        {isLoading && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center z-20 bg-slate-50/80 backdrop-blur-sm">
-            <div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
-            <p className="mt-4 text-slate-600 font-medium animate-pulse">Loading Order to Cash graph...</p>
-          </div>
-        )}
-
-        {error && (
-          <div className="absolute inset-0 flex items-center justify-center z-20">
-            <div className="bg-red-50 text-red-600 p-4 rounded-lg border border-red-200 max-w-md text-center shadow-lg">
-              <h3 className="font-bold mb-1">Connection Error</h3>
-              <p className="text-sm">{error}</p>
-            </div>
-          </div>
-        )}
-
-        <div className={`absolute top-4 left-1/2 transform -translate-x-1/2 z-50 transition-all duration-500 ${showToast ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}`}>
-          <div className="bg-green-100 text-green-800 border border-green-200 px-4 py-2 rounded shadow-sm text-sm font-medium">
-            Loaded {graphData.nodes.length} nodes and {graphData.edges.length} edges
-          </div>
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-white text-slate-900 font-sans">
+      <div style={{
+        height: '48px',
+        borderBottom: '1px solid #e2e8f0',
+        display: 'flex',
+        alignItems: 'center',
+        padding: '0 20px',
+        gap: '8px',
+        fontSize: '13px',
+        color: '#64748b',
+        background: 'white',
+        flexShrink: 0
+      }}>
+        <span>Mapping</span>
+        <span>/</span>
+        <span style={{ color: '#1e293b', fontWeight: 600 }}>
+          Order to Cash
+        </span>
+        <div style={{
+          marginLeft: 'auto',
+          fontSize: '11px',
+          color: '#94a3b8'
+        }}>
+          {graphData.nodes.length} nodes · {graphData.edges.length} edges
         </div>
-
-        {!isLoading && !error && (
-          <ReactFlowProvider>
-            <GraphView
-              ref={graphRef}
-              nodes={graphData.nodes}
-              edges={graphData.edges}
-              highlightedNodeIds={highlightedNodeIds}
-              onNodeClick={handleNodeClick}
-            />
-          </ReactFlowProvider>
-        )}
-
-        {!isLoading && !error && <Legend />}
       </div>
 
-      <div className="w-[380px] h-full flex-shrink-0 z-10 relative shadow-[-4px_0_15px_rgba(0,0,0,0.03)]">
-        <ChatPanel
-          ref={chatPanelRef}
-          onHighlightNodes={handleHighlightNodes}
-          graphNodes={graphData.nodes}
-        />
+      <div className="flex flex-1 overflow-hidden relative">
+        <div className="relative flex-grow h-full bg-slate-50">
+          {isLoading && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center z-20 bg-slate-50/80 backdrop-blur-sm">
+              <div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
+              <p className="mt-4 text-slate-600 font-medium animate-pulse">Loading Order to Cash graph...</p>
+            </div>
+          )}
+
+          {error && (
+            <div className="absolute inset-0 flex items-center justify-center z-20">
+              <div className="bg-red-50 text-red-600 p-4 rounded-lg border border-red-200 max-w-md text-center shadow-lg">
+                <h3 className="font-bold mb-1">Connection Error</h3>
+                <p className="text-sm">{error}</p>
+              </div>
+            </div>
+          )}
+
+          <div className={`absolute top-4 left-1/2 transform -translate-x-1/2 z-50 transition-all duration-500 ${showToast ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}`}>
+            <div className="bg-green-100 text-green-800 border border-green-200 px-4 py-2 rounded shadow-sm text-sm font-medium">
+              Loaded {graphData.nodes.length} nodes and {graphData.edges.length} edges
+            </div>
+          </div>
+
+          {!isLoading && !error && (
+            <ReactFlowProvider>
+              <GraphView
+                ref={graphRef}
+                nodes={graphData.nodes}
+                edges={graphData.edges}
+                highlightedNodeIds={highlightedNodeIds}
+                onNodeClick={handleNodeClick}
+              />
+            </ReactFlowProvider>
+          )}
+
+          {!isLoading && !error && <Legend />}
+        </div>
+
+        <div className="w-[380px] h-full flex-shrink-0 z-10 relative shadow-[-4px_0_15px_rgba(0,0,0,0.03)]">
+          <ChatPanel
+            ref={chatPanelRef}
+            onHighlightNodes={handleHighlightNodes}
+            graphNodes={graphData.nodes}
+          />
+        </div>
       </div>
     </div>
   );

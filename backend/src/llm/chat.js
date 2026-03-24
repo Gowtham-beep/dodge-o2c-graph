@@ -111,6 +111,48 @@ CRITICAL SQL RULES — violations will cause runtime errors:
    SELECT * FROM sales_order_headers 
    WHERE "salesOrder" = 'X' LIMIT 1
 
+For tracing the full flow of a document, use a single 
+SQL query with JOINs rather than multiple statements.
+
+Example for tracing billing document flow:
+SELECT 
+  soh."salesOrder",
+  soh."soldToParty",
+  soh."totalNetAmount",
+  soh."overallDeliveryStatus",
+  soh."overallOrdReltdBillgStatus",
+  bdh."billingDocument",
+  bdh."billingDocumentDate",
+  bdh."billingDocumentIsCancelled",
+  bdh."totalNetAmount" as "billedAmount",
+  bdh."accountingDocument",
+  ji."postingDate",
+  ji."amountInTransactionCurrency",
+  p."clearingDate",
+  p."amountInTransactionCurrency" as "paidAmount",
+  odh."deliveryDocument",
+  odh."actualGoodsMovementDate",
+  odh."overallGoodsMovementStatus"
+FROM billing_document_headers bdh
+LEFT JOIN billing_document_items bdi 
+  ON bdh."billingDocument" = bdi."billingDocument"
+LEFT JOIN sales_order_headers soh 
+  ON bdi."referenceSdDocument" = soh."salesOrder"
+LEFT JOIN journal_entry_items ji 
+  ON bdh."accountingDocument" = ji."accountingDocument"
+LEFT JOIN payments p 
+  ON bdh."billingDocument" = p."invoiceReference"
+LEFT JOIN outbound_delivery_items odi 
+  ON soh."salesOrder" = odi."referenceSdDocument"
+LEFT JOIN outbound_delivery_headers odh 
+  ON odi."deliveryDocument" = odh."deliveryDocument"
+WHERE bdh."billingDocument" = '[ID]'
+LIMIT 1
+
+Always use this JOIN pattern for flow tracing.
+Never use multiple statements separated by semicolons.
+Always use single quotes for string values.
+
 CRITICAL: Your response must be a single JSON object only.
 No text before or after the JSON.
 No nested JSON strings — if the answer contains quotes, escape them properly.
@@ -178,6 +220,16 @@ function parseJSON(text) {
   return { sql: null, answer: cleaned };
 }
 
+function extractFirstStatement(sql) {
+  if (!sql) return sql;
+  // Split on semicolons, take first non-empty statement
+  const statements = sql
+    .split(';')
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+  return statements[0];
+}
+
 export async function handleChat(userMessage, history, client) {
   try {
     const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -236,9 +288,10 @@ export async function handleChat(userMessage, history, client) {
     }
 
     const sanitizedSQL = sanitizeSQL(parsed.sql);
-    console.log('Executing SQL:', sanitizedSQL);
+    const singleSQL = extractFirstStatement(sanitizedSQL);
+    console.log('Executing SQL:', singleSQL);
 
-    const queryResult = await client.query(sanitizedSQL);
+    const queryResult = await client.query(singleSQL);
     const results = queryResult.rows || [];
     console.log(`Query returned ${results.length} rows`);
 
