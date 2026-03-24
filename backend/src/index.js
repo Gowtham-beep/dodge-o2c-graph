@@ -1,6 +1,9 @@
-const Fastify = require('fastify');
-const cors = require('@fastify/cors');
-require('dotenv').config();
+import Fastify from 'fastify';
+import cors from '@fastify/cors';
+import dotenv from 'dotenv';
+import apiRoutes from './routes/api.js';
+
+dotenv.config();
 
 const fastify = Fastify({
     logger: true
@@ -9,6 +12,8 @@ const fastify = Fastify({
 fastify.register(cors, {
     origin: '*'
 });
+
+fastify.register(apiRoutes);
 
 fastify.get('/health', async (request, reply) => {
     return { status: 'ok', time: new Date().toISOString() };
