@@ -15,3 +15,18 @@ body,
 .react-flow__node-custom {
   overflow: visible !important;
 }
+
+@keyframes dashdraw {
+  from {
+    stroke-dashoffset: 10;
+  }
+
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.animated-edge {
+  stroke-dasharray: 5;
+  animation: dashdraw 0.5s linear infinite;
+}

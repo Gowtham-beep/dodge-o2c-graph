@@ -1,4 +1,18 @@
-import React, { useState, useMemo, useEffect, forwardRef, useImperativeHandle } from 'react';
+import React, { useState, forwardRef, useImperativeHandle } from 'react';
+import {
+    ReactFlow,
+    Controls,
+    Background,
+    MiniMap,
+    Handle,
+    Position,
+    MarkerType,
+    useReactFlow,
+    BaseEdge,
+    EdgeLabelRenderer,
+    getStraightPath
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 
 function formatValue(key, value) {
     if (value === null || value === undefined) return '—';
@@ -17,19 +31,6 @@ function formatValue(key, value) {
     }
     return String(value);
 }
-import {
-    ReactFlow,
-    Controls,
-    Background,
-    MiniMap,
-    useNodesState,
-    useEdgesState,
-    Handle,
-    Position,
-    MarkerType,
-    useReactFlow
-} from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
 
 const NODE_COLORS = {
     SalesOrder: '#3B82F6', // (blue)
@@ -44,7 +45,7 @@ const NODE_COLORS = {
 
 const CustomNode = ({ data, id, selected }) => {
     const [hovered, setHovered] = useState(false);
-    const isHighlighted = data.isHighlighted;
+    const { isHighlighted, granularOverlay } = data;
     const nodeColor = NODE_COLORS[data.nodeType] || '#CBD5E1';
 
     const defaultStyle = {
@@ -55,8 +56,8 @@ const CustomNode = ({ data, id, selected }) => {
         gap: '6px',
         background: 'white',
         border: `1px solid ${selected ? '#333' : '#e2e8f0'}`,
-        borderRadius: '20px',  // pill shape
-        padding: '4px 10px',
+        borderRadius: '20px',
+        padding: granularOverlay ? '4px 10px' : '2px 8px',
         fontSize: '10px',
         whiteSpace: 'nowrap',
         cursor: 'pointer',
@@ -74,6 +75,8 @@ const CustomNode = ({ data, id, selected }) => {
     };
 
     const currentStyle = isHighlighted ? highlightedStyle : defaultStyle;
+
+    const shortLabel = data.label ? data.label.substring(0, 8) + (data.label.length > 8 ? '...' : '') : '';
 
     return (
         <div
@@ -99,7 +102,7 @@ const CustomNode = ({ data, id, selected }) => {
                 fontSize: isHighlighted ? '11px' : '10px',
                 transition: 'all 0.2s ease',
             }}>
-                {data.label}
+                {granularOverlay ? data.label : shortLabel}
             </span>
             <Handle type="source" position={Position.Right} style={{ visibility: 'hidden' }} />
 
@@ -139,71 +142,166 @@ const CustomNode = ({ data, id, selected }) => {
                         }}>
                             {data.nodeType}
                         </span>
-                        <span style={{
-                            fontSize: '10px',
-                            color: '#94a3b8'
-                        }}>
-                            {Object.keys(data.meta || {}).length} fields
-                        </span>
+                        {granularOverlay && (
+                            <span style={{
+                                fontSize: '10px',
+                                color: '#94a3b8'
+                            }}>
+                                {Object.keys(data.meta || {}).length} fields
+                            </span>
+                        )}
                     </div>
 
                     <div style={{
                         fontSize: '13px',
                         fontWeight: 600,
                         color: '#1e293b',
-                        marginBottom: '8px',
+                        marginBottom: granularOverlay ? '8px' : '0px',
                         whiteSpace: 'normal',
                         wordBreak: 'break-word'
                     }}>
                         {data.label}
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                        {Object.entries(data.meta || {})
-                            .filter(([k, v]) => v !== null && v !== '' && k !== 'id')
-                            .slice(0, 6)
-                            .map(([key, value]) => (
-                                <div key={key} style={{
-                                    display: 'flex',
-                                    justifyContent: 'space-between',
-                                    gap: '8px',
-                                    fontSize: '11px'
-                                }}>
-                                    <span style={{
-                                        color: '#64748b',
-                                        fontWeight: 500,
-                                        flexShrink: 0
+                    {granularOverlay && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            {Object.entries(data.meta || {})
+                                .filter(([k, v]) => v !== null && v !== '' && k !== 'id')
+                                .slice(0, 6)
+                                .map(([key, value]) => (
+                                    <div key={key} style={{
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        gap: '8px',
+                                        fontSize: '11px'
                                     }}>
-                                        {key.replace(/([A-Z])/g, ' $1').trim()}:
-                                    </span>
-                                    <span style={{
-                                        color: '#1e293b',
-                                        textAlign: 'right',
-                                        maxWidth: '140px',
-                                        overflow: 'hidden',
-                                        textOverflow: 'ellipsis',
-                                        whiteSpace: 'nowrap'
-                                    }}>
-                                        {formatValue(key, value)}
-                                    </span>
-                                </div>
-                            ))
-                        }
-                    </div>
+                                        <span style={{
+                                            color: '#64748b',
+                                            fontWeight: 500,
+                                            flexShrink: 0
+                                        }}>
+                                            {key.replace(/([A-Z])/g, ' $1').trim()}:
+                                        </span>
+                                        <span style={{
+                                            color: '#1e293b',
+                                            textAlign: 'right',
+                                            maxWidth: '140px',
+                                            overflow: 'hidden',
+                                            textOverflow: 'ellipsis',
+                                            whiteSpace: 'nowrap'
+                                        }}>
+                                            {formatValue(key, value)}
+                                        </span>
+                                    </div>
+                                ))
+                            }
+                        </div>
+                    )}
 
-                    <div style={{
-                        marginTop: '8px',
-                        paddingTop: '8px',
-                        borderTop: '1px solid #f1f5f9',
-                        fontSize: '10px',
-                        color: '#94a3b8',
-                        textAlign: 'left'
-                    }}>
-                        Click to analyze in chat
-                    </div>
+                    {!granularOverlay && (
+                        <div style={{
+                            marginTop: '4px',
+                            fontSize: '10px',
+                            color: '#94a3b8',
+                            textAlign: 'left'
+                        }}>
+                            Expand overlay to see full details
+                        </div>
+                    )}
+
+                    {granularOverlay && (
+                        <div style={{
+                            marginTop: '8px',
+                            paddingTop: '8px',
+                            borderTop: '1px solid #f1f5f9',
+                            fontSize: '10px',
+                            color: '#94a3b8',
+                            textAlign: 'left'
+                        }}>
+                            Click to analyze in chat
+                        </div>
+                    )}
                 </div>
             )}
         </div>
+    );
+};
+
+const CustomEdge = ({
+    id, sourceX, sourceY, targetX, targetY,
+    data, style, markerEnd
+}) => {
+    const [hovered, setHovered] = useState(false);
+    const [edgePath, labelX, labelY] = getStraightPath({
+        sourceX, sourceY, targetX, targetY
+    });
+
+    const { label, isHighlighted, anyHighlighted, granularOverlay } = data || {};
+
+    let opacity = 0.5;
+    if (granularOverlay === false) opacity = 0.3;
+    if (isHighlighted) opacity = 1;
+    else if (anyHighlighted) opacity = 0.1;
+    if (hovered) opacity = 1;
+
+    let stroke = style?.stroke || '#e2e8f0';
+    if (isHighlighted) stroke = '#F59E0B';
+    else if (hovered) stroke = '#3B82F6';
+
+    let strokeWidth = style?.strokeWidth || 1.5;
+    if (isHighlighted) strokeWidth = 2.5;
+    else if (hovered) strokeWidth = 2;
+
+    const showLabel = isHighlighted || hovered;
+
+    return (
+        <>
+            <path
+                d={edgePath}
+                fill="none"
+                stroke="transparent"
+                strokeWidth={12}
+                onMouseEnter={() => setHovered(true)}
+                onMouseLeave={() => setHovered(false)}
+                style={{ cursor: 'pointer' }}
+            />
+            <BaseEdge
+                path={edgePath}
+                markerEnd={markerEnd}
+                style={{
+                    ...style,
+                    stroke,
+                    strokeWidth,
+                    opacity,
+                    transition: 'all 0.2s'
+                }}
+                className={isHighlighted ? 'animated-edge' : ''}
+            />
+            {showLabel && label && (
+                <EdgeLabelRenderer>
+                    <div
+                        style={{
+                            position: 'absolute',
+                            transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+                            background: isHighlighted ? '#F59E0B' : '#1e293b',
+                            color: 'white',
+                            padding: '3px 8px',
+                            borderRadius: '4px',
+                            fontSize: '10px',
+                            fontWeight: 600,
+                            letterSpacing: '0.05em',
+                            pointerEvents: 'none',
+                            zIndex: 9999,
+                            whiteSpace: 'nowrap',
+                            boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
+                        }}
+                        className="nodrag nopan"
+                    >
+                        {label}
+                    </div>
+                </EdgeLabelRenderer>
+            )}
+        </>
     );
 };
 
@@ -211,50 +309,11 @@ const nodeTypes = {
     custom: CustomNode,
 };
 
-const getScatteredPosition = (index, total, nodeType) => {
-    const typeOffsets = {
-        BusinessPartner: { x: 0, y: 500 },
-        SalesOrder: { x: 800, y: 500 },
-        OutboundDelivery: { x: 1600, y: 0 },
-        BillingDocument: { x: 1600, y: 1000 },
-        JournalEntry: { x: 2400, y: 800 },
-        Payment: { x: 3200, y: 800 },
-        Product: { x: 800, y: 1200 },
-        Plant: { x: 1600, y: -400 },
-    };
-
-    const offset = typeOffsets[nodeType] || { x: 0, y: 0 };
-    return {
-        x: offset.x + (index % 6) * 220,
-        y: offset.y + Math.floor(index / 6) * 120
-    };
+const edgeTypes = {
+    custom: CustomEdge,
 };
 
-const processLayout = (nodes, edges) => {
-    const typeCounts = {};
-
-    const positionedNodes = nodes.map((node) => {
-        const type = node.data?.nodeType || 'Unknown';
-        if (!typeCounts[type]) typeCounts[type] = 0;
-
-        const index = typeCounts[type]++;
-        const total = nodes.length; // rough estimate
-        const position = getScatteredPosition(index, total, type);
-
-        return {
-            ...node,
-            position,
-            targetPosition: Position.Left,
-            sourcePosition: Position.Right,
-        };
-    });
-
-    return { nodes: positionedNodes, edges };
-};
-
-const GraphViewInner = forwardRef(({ nodes, edges, highlightedNodeIds, onNodeClick }, ref) => {
-    const [layoutedNodes, setLayoutedNodes, onNodesChange] = useNodesState([]);
-    const [layoutedEdges, setLayoutedEdges, onEdgesChange] = useEdgesState([]);
+const GraphViewInner = forwardRef(({ nodes, edges, onNodesChange, highlightedNodeIds, granularOverlay, onNodeClick }, ref) => {
     const reactFlowInstance = useReactFlow();
 
     useImperativeHandle(ref, () => ({
@@ -277,37 +336,26 @@ const GraphViewInner = forwardRef(({ nodes, edges, highlightedNodeIds, onNodeCli
         }
     }));
 
-    useEffect(() => {
-        if (!nodes.length) return;
-
-        const nodesWithHighlight = nodes.map(n => ({
-            ...n,
-            data: {
-                ...n.data,
-                isHighlighted: highlightedNodeIds.includes(n.id)
-            }
-        }));
-
-        const { nodes: repositionedNodes, edges: unformattedEdges } = processLayout(
-            nodesWithHighlight,
-            edges
-        );
-
-        setLayoutedNodes(repositionedNodes);
-        setLayoutedEdges(unformattedEdges);
-    }, [nodes, edges, highlightedNodeIds, setLayoutedNodes, setLayoutedEdges]);
+    const nodesWithHighlight = nodes.map(n => ({
+        ...n,
+        data: {
+            ...n.data,
+            isHighlighted: highlightedNodeIds.includes(n.id),
+            granularOverlay
+        }
+    }));
 
     return (
         <div style={{ width: '100%', height: '100%', position: 'relative' }}>
             <ReactFlow
                 style={{ width: '100%', height: '100%', overflow: 'visible' }}
                 edgesUpdatable={false}
-                nodes={layoutedNodes}
-                edges={layoutedEdges}
+                nodes={nodesWithHighlight}
+                edges={edges}
                 onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
                 onNodeClick={(_, node) => onNodeClick(node)}
                 nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
                 fitView={true}
                 fitViewOptions={{ padding: 0.15 }}
                 minZoom={0.05}
@@ -322,10 +370,7 @@ const GraphViewInner = forwardRef(({ nodes, edges, highlightedNodeIds, onNodeCli
                 preventScrolling={true}
                 defaultViewport={{ x: 0, y: 0, zoom: 0.5 }}
                 defaultEdgeOptions={{
-                    type: 'straight',
-                    labelStyle: { display: 'none' },
-                    labelBgStyle: { display: 'none' },
-                    label: '',
+                    type: 'custom',
                     style: {
                         stroke: '#e2e8f0',
                         strokeWidth: 1.5,
