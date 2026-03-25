@@ -30,3 +30,8 @@ body,
   stroke-dasharray: 5;
   animation: dashdraw 0.5s linear infinite;
 }
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}

@@ -371,3 +371,127 @@ Respond directly with the text of your answer, do not use JSON.`;
     };
   }
 }
+
+export async function handleChatStream(userMessage, history, client, onToken, onSql) {
+  try {
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    const model = 'llama-3.3-70b-versatile';
+
+    let messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+
+    if (history && history.length > 0) {
+      let mapped = history.map(msg => ({
+        role: msg.role === 'user' ? 'user' : 'assistant',
+        content: msg.text.replace(/\n\[SQL used: .*\]$/, '')
+      }));
+
+      while (mapped.length > 0 && mapped[0].role === 'assistant') {
+        mapped.shift();
+      }
+
+      let validHistory = [];
+      let expectedRole = 'user';
+      for (const msg of mapped) {
+        if (msg.role === expectedRole) {
+          validHistory.push(msg);
+          expectedRole = expectedRole === 'user' ? 'assistant' : 'user';
+        }
+      }
+
+      if (validHistory.length > 0 && validHistory[validHistory.length - 1].role === 'user') {
+        validHistory.pop();
+      }
+
+      messages = messages.concat(validHistory);
+    }
+
+    messages.push({ role: 'user', content: userMessage });
+
+    const completion = await groq.chat.completions.create({
+      model: model,
+      messages: messages,
+      temperature: 0.1,
+      max_tokens: 1024,
+    });
+
+    const responseText = completion.choices[0].message.content;
+    const parsed = parseJSON(responseText);
+
+    if (!parsed.sql) {
+      if (parsed.answer) {
+        onToken(parsed.answer);
+      }
+      return {
+        sql: null,
+        answer: parsed.answer,
+        results: [],
+        nodeIds: []
+      };
+    }
+
+    const sanitizedSQL = sanitizeSQL(parsed.sql);
+    const singleSQL = extractFirstStatement(sanitizedSQL);
+    console.log('Executing SQL:', singleSQL);
+
+    if (onSql) onSql(singleSQL);
+
+    const queryResult = await client.query(singleSQL);
+    const results = queryResult.rows || [];
+    console.log(`Query returned ${results.length} rows`);
+
+    const limitedResults = results.slice(0, 50);
+
+    const followUpMessage = `The SQL query returned ${results.length} rows. Here are the results:
+${String(JSON.stringify(limitedResults))}
+Based on these actual results, write a clear 2-3 sentence business-friendly answer. Be specific with numbers and names. 
+At the end of your answer, add a line:
+ENTITY_IDS: [comma separated list of all entity IDs mentioned, including salesOrder, billingDocument, deliveryDocument, accountingDocument, businessPartner, product, plant, customer IDs]
+
+Example:
+ENTITY_IDS: 90504243, 9400000244, 740556, 80738099
+
+Respond directly with the text of your answer, do not use JSON.`;
+
+    const stream = await groq.chat.completions.create({
+      model: model,
+      messages: [
+        { role: 'system', content: 'You are a business data analyst.' },
+        { role: 'user', content: followUpMessage }
+      ],
+      temperature: 0.1,
+      max_tokens: 1024,
+      stream: true,
+    });
+
+    let fullAnswer = '';
+    for await (const chunk of stream) {
+      const token = chunk.choices[0]?.delta?.content || '';
+      if (token) {
+        fullAnswer += token;
+        onToken(token);
+      }
+    }
+
+    let nodeIds = extractNodeIds(results, fullAnswer);
+
+    const cleanAnswer = fullAnswer
+      .replace(/ENTITY_IDS:.*$/m, '')
+      .trim();
+
+    return {
+      sql: parsed.sql,
+      answer: cleanAnswer,
+      results: results,
+      nodeIds: nodeIds
+    };
+
+  } catch (err) {
+    onToken("I encountered an error: " + err.message);
+    return {
+      sql: null,
+      answer: "I encountered an error: " + err.message,
+      results: [],
+      nodeIds: []
+    };
+  }
+}

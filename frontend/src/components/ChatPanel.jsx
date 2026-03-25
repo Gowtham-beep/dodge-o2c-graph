@@ -40,6 +40,18 @@ const ChatPanel = forwardRef(({ onHighlightNodes, graphNodes }, ref) => {
         setIsLoading(true);
         onHighlightNodes([]);
 
+        // Add empty assistant message that we'll fill in
+        const assistantMsgId = Date.now();
+        setMessages(prev => [...prev, {
+            id: assistantMsgId,
+            role: 'model',
+            text: '',
+            sql: null,
+            isStreaming: true,
+            results: [],
+            nodeIds: []
+        }]);
+
         try {
             const historyMsg = messages
                 .filter(m => m.role !== 'model' || messages.indexOf(m) !== 0) // exclude welcome message
@@ -51,37 +63,77 @@ const ChatPanel = forwardRef(({ onHighlightNodes, graphNodes }, ref) => {
                         : m.text
                 }));
 
-            const response = await axios.post('http://localhost:3001/api/chat', {
-                message: userText,
-                history: historyMsg
+            const response = await fetch('http://localhost:3001/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: userText,
+                    history: historyMsg
+                })
             });
 
-            const data = response.data;
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
 
-            setMessages(prev => [...prev, {
-                role: 'model',
-                text: data.answer,
-                sql: data.sql,
-                results: data.results,
-                nodeIds: data.nodeIds
-            }]);
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
 
-            if (data.nodeIds && data.nodeIds.length > 0) {
-                onHighlightNodes(data.nodeIds);
-            } else {
-                onHighlightNodes([]);
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n\n');
+                buffer = lines.pop(); // keep incomplete chunk
+
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const event = JSON.parse(line.slice(6));
+
+                        if (event.type === 'sql') {
+                            setMessages(prev => prev.map(m =>
+                                m.id === assistantMsgId
+                                    ? { ...m, sql: event.sql }
+                                    : m
+                            ));
+                        }
+
+                        if (event.type === 'token') {
+                            setMessages(prev => prev.map(m =>
+                                m.id === assistantMsgId
+                                    ? { ...m, text: m.text + event.content }
+                                    : m
+                            ));
+                        }
+
+                        if (event.type === 'done') {
+                            setMessages(prev => prev.map(m =>
+                                m.id === assistantMsgId
+                                    ? { ...m, isStreaming: false, nodeIds: event.nodeIds || [] }
+                                    : m
+                            ));
+                            if (event.nodeIds?.length > 0) {
+                                onHighlightNodes(event.nodeIds);
+                            }
+                        }
+                    } catch (e) { }
+                }
             }
-
         } catch (error) {
             console.error(error);
-            setMessages(prev => [...prev, {
-                role: 'model',
-                text: 'Sorry, I encountered an error communicating with the server.'
-            }]);
+            setMessages(prev => prev.map(m =>
+                m.id === assistantMsgId
+                    ? {
+                        ...m,
+                        text: 'Sorry, I encountered an error communicating with the server.\n' + error.message,
+                        isStreaming: false
+                    }
+                    : m
+            ));
         } finally {
             setIsLoading(false);
         }
     };
+
 
     useImperativeHandle(ref, () => ({
         sendMessage: (msg) => {
@@ -164,7 +216,19 @@ function ChatMessage({ message, graphNodes }) {
                     : 'bg-white text-slate-800 border border-slate-200 rounded-2xl rounded-tl-sm'
                     }`}
             >
-                <div className="whitespace-pre-wrap">{message.text}</div>
+                <div className="whitespace-pre-wrap">
+                    {message.text}
+                    {message.isStreaming && (
+                        <span style={{
+                            display: 'inline-block',
+                            width: '2px',
+                            height: '14px',
+                            background: '#64748b',
+                            marginLeft: '2px',
+                            animation: 'blink 1s infinite'
+                        }} />
+                    )}
+                </div>
 
                 {message.sql && (
                     <div className="mt-3 pt-2 border-t border-slate-100">
