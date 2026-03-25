@@ -269,7 +269,7 @@ export async function handleChat(userMessage, history, client) {
     if (history && history.length > 0) {
       let mapped = history.map(msg => ({
         role: msg.role === 'user' ? 'user' : 'assistant',
-        content: msg.text
+        content: msg.text.replace(/\n\[SQL used: .*\]$/, '')
       }));
 
       // Strip leading assistant messages

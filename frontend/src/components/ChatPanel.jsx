@@ -41,7 +41,15 @@ const ChatPanel = forwardRef(({ onHighlightNodes, graphNodes }, ref) => {
         onHighlightNodes([]);
 
         try {
-            const historyMsg = messages.slice(-6).map(m => ({ role: m.role === 'model' ? 'model' : 'user', text: m.text }));
+            const historyMsg = messages
+                .filter(m => m.role !== 'model' || messages.indexOf(m) !== 0) // exclude welcome message
+                .slice(-8) // last 8 messages
+                .map(m => ({
+                    role: m.role,
+                    text: m.role === 'model' && m.sql
+                        ? `${m.text}\n[SQL used: ${m.sql}]`
+                        : m.text
+                }));
 
             const response = await axios.post('http://localhost:3001/api/chat', {
                 message: userText,
