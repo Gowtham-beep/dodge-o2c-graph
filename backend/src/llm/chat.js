@@ -1,5 +1,11 @@
 import Groq from 'groq-sdk';
 
+function getGroqClient() {
+  return new Groq({
+    apiKey: process.env.GROQ_API_KEY
+  });
+}
+
 const SYSTEM_PROMPT = `
 You are a data analyst for a SAP Order-to-Cash ERP system.
 You have access to the following PostgreSQL tables:
@@ -327,7 +333,7 @@ function extractFirstStatement(sql) {
 
 export async function handleChat(userMessage, history, client) {
   try {
-    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    const groq = getGroqClient();
     const model = 'llama-3.3-70b-versatile';
 
     let messages = [{ role: 'system', content: SYSTEM_PROMPT }];
@@ -369,7 +375,6 @@ export async function handleChat(userMessage, history, client) {
       temperature: 0.1,
       max_tokens: 1024,
     });
-
     const responseText = completion.choices[0].message.content;
     const parsed = parseJSON(responseText);
 
@@ -492,7 +497,7 @@ Write a clear, business-friendly answer in 3-4 sentences.
 
 export async function handleChatStream(userMessage, history, client, onToken, onSql) {
   try {
-    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    const groq = getGroqClient();
     const model = 'llama-3.3-70b-versatile';
 
     let messages = [{ role: 'system', content: SYSTEM_PROMPT }];

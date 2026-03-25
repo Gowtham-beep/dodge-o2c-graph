@@ -45,8 +45,10 @@ const NODE_COLORS = {
 };
 
 const CustomNode = ({ data, id, selected }) => {
+    const reactFlowContext = useReactFlow();
     const [hovered, setHovered] = useState(false);
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+    const clickTimer = React.useRef(null);
     const { isHighlighted, granularOverlay } = data;
     const nodeColor = NODE_COLORS[data.nodeType] || '#CBD5E1';
 
@@ -80,6 +82,26 @@ const CustomNode = ({ data, id, selected }) => {
 
     const shortLabel = data.label ? data.label.substring(0, 8) + (data.label.length > 8 ? '...' : '') : '';
 
+    React.useEffect(() => {
+        return () => {
+            if (clickTimer.current) clearTimeout(clickTimer.current);
+        };
+    }, []);
+
+    const handleClick = () => {
+        clickTimer.current = setTimeout(() => {
+            if (data.onNodeClick) data.onNodeClick();
+        }, 250);
+    };
+
+    const handleDoubleClick = () => {
+        if (clickTimer.current) {
+            clearTimeout(clickTimer.current);
+            clickTimer.current = null;
+        }
+        if (data.onNodeDoubleClick) data.onNodeDoubleClick();
+    };
+
     return (
         <div
             style={{
@@ -97,6 +119,8 @@ const CustomNode = ({ data, id, selected }) => {
                 setMousePos({ x: e.clientX, y: e.clientY });
             }}
             onMouseLeave={() => setHovered(false)}
+            onClick={handleClick}
+            onDoubleClick={handleDoubleClick}
         >
             <Handle type="target" position={Position.Left} style={{ visibility: 'hidden' }} />
             <div style={{
@@ -233,7 +257,7 @@ const CustomNode = ({ data, id, selected }) => {
                             textAlign: 'left'
                         }}>
                             <div style={{ marginBottom: '2px' }}>Click to analyze in chat</div>
-                            <div>Double-click to expand neighbors</div>
+                            <div>{data.isExpandedNode ? 'Double-click to collapse' : 'Double-click to expand neighbors'}</div>
                         </div>
                     )}
                 </div>,
@@ -252,7 +276,7 @@ const CustomEdge = ({
         sourceX, sourceY, targetX, targetY
     });
 
-    const { label, isHighlighted, anyHighlighted, granularOverlay } = data || {};
+    const { label, isHighlighted, anyHighlighted, granularOverlay, forceShowLabel, isExpanded } = data || {};
 
     let opacity = 0.5;
     if (granularOverlay === false) opacity = 0.3;
@@ -262,14 +286,16 @@ const CustomEdge = ({
     if (style?.opacity !== undefined) opacity = style.opacity;
 
     let stroke = style?.stroke || '#e2e8f0';
-    if (isHighlighted) stroke = '#F59E0B';
+    if (isExpanded) stroke = '#3B82F6';
+    else if (isHighlighted) stroke = '#F59E0B';
     else if (hovered) stroke = '#3B82F6';
 
     let strokeWidth = style?.strokeWidth || 1.5;
-    if (isHighlighted) strokeWidth = 2.5;
+    if (isExpanded) strokeWidth = 2.5;
+    else if (isHighlighted) strokeWidth = 2.5;
     else if (hovered) strokeWidth = 2;
 
-    const showLabel = isHighlighted || hovered;
+    const showLabel = isHighlighted || hovered || forceShowLabel;
 
     return (
         <>
@@ -300,7 +326,7 @@ const CustomEdge = ({
                         style={{
                             position: 'absolute',
                             transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-                            background: isHighlighted ? '#F59E0B' : '#1e293b',
+                            background: isExpanded ? '#3B82F6' : (isHighlighted ? '#F59E0B' : '#1e293b'),
                             color: 'white',
                             padding: '3px 8px',
                             borderRadius: '4px',
@@ -358,7 +384,9 @@ const GraphViewInner = forwardRef(({ nodes, edges, onNodesChange, highlightedNod
         data: {
             ...n.data,
             isHighlighted: highlightedNodeIds.includes(n.id),
-            granularOverlay
+            granularOverlay,
+            onNodeClick: () => onNodeClick(n),
+            onNodeDoubleClick: () => onNodeDoubleClick?.(n.id)
         }
     }));
 
@@ -370,8 +398,6 @@ const GraphViewInner = forwardRef(({ nodes, edges, onNodesChange, highlightedNod
                 nodes={nodesWithHighlight}
                 edges={edges}
                 onNodesChange={onNodesChange}
-                onNodeClick={(_, node) => onNodeClick(node)}
-                onNodeDoubleClick={(_, node) => onNodeDoubleClick?.(node.id)}
                 nodeTypes={nodeTypes}
                 edgeTypes={edgeTypes}
                 fitView={true}

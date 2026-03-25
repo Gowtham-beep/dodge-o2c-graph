@@ -255,6 +255,10 @@ function App() {
             const displayNodes = expandedNodeId
               ? nodes.map(n => ({
                   ...n,
+                  data: {
+                    ...n.data,
+                    isExpandedNode: n.id === expandedNodeId
+                  },
                   style: {
                     ...n.style,
                     opacity: getNeighborIds(expandedNodeId).includes(n.id) ? 1 : 0.08
@@ -263,13 +267,24 @@ function App() {
               : nodes;
 
             const displayEdges = expandedNodeId
-              ? enrichedEdges.map(e => ({
-                  ...e,
-                  style: {
-                    ...e.style,
-                    opacity: (e.source === expandedNodeId || e.target === expandedNodeId) ? 1 : 0.05
-                  }
-                }))
+              ? enrichedEdges.map(e => {
+                  const isConnected = e.source === expandedNodeId || e.target === expandedNodeId;
+                  return {
+                    ...e,
+                    data: {
+                      ...e.data,
+                      isExpanded: isConnected,
+                      forceShowLabel: isConnected,
+                      anyHighlighted: false
+                    },
+                    style: {
+                      ...e.style,
+                      stroke: isConnected ? '#3B82F6' : '#e2e8f0',
+                      strokeWidth: isConnected ? 2.5 : 0.5,
+                      opacity: isConnected ? 1 : 0.05
+                    }
+                  };
+                })
               : enrichedEdges;
 
             return (
@@ -326,27 +341,31 @@ function App() {
                   >
                     ✕ Clear highlights ({highlightedNodeIds.length})
                   </button>
-                  {expandedNodeId && (
-                    <button onClick={() => setExpandedNodeId(null)}
-                      style={{
-                        padding: '6px 12px',
-                        background: '#3B82F6',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '6px',
-                        fontSize: '12px',
-                        fontWeight: 500,
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-                      }}
-                    >
-                      ← Show all nodes
-                    </button>
-                  )}
                 </div>
+                {expandedNodeId && (
+                  <button onClick={() => setExpandedNodeId(null)}
+                    style={{
+                      position: 'absolute',
+                      top: 12,
+                      left: 200,
+                      zIndex: 1000,
+                      padding: '6px 12px',
+                      background: '#3B82F6',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+                    }}
+                  >
+                    ← Show all nodes
+                  </button>
+                )}
                 <GraphView
                   ref={graphRef}
                   nodes={displayNodes}
