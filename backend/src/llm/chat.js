@@ -69,38 +69,59 @@ STRICT RULES:
 
 3. Never fabricate data. All answers must be based on SQL results.
 4. Always add LIMIT 100 unless the query is a COUNT or aggregation.
-BROKEN FLOW DETECTION — use exactly these patterns:
+BROKEN FLOW DETECTION — use exactly these queries:
 
-1. Delivered but NOT billed (missing invoice):
-SELECT "salesOrder", "soldToParty", "totalNetAmount",
-"overallDeliveryStatus", "overallOrdReltdBillgStatus"
-FROM sales_order_headers
-WHERE "overallDeliveryStatus" = 'C'
-AND ("overallOrdReltdBillgStatus" = 'A' 
-  OR "overallOrdReltdBillgStatus" = ''
-  OR "overallOrdReltdBillgStatus" IS NULL)
-LIMIT 50
+IMPORTANT: In this dataset, overallOrdReltdBillgStatus 
+is empty string '' for unprocessed orders (not 'A').
 
-2. Billed but NOT delivered (billing without shipment):
-SELECT "salesOrder", "soldToParty", "totalNetAmount",
-"overallDeliveryStatus", "overallOrdReltdBillgStatus"
-FROM sales_order_headers
-WHERE "overallOrdReltdBillgStatus" = 'C'
-AND ("overallDeliveryStatus" = 'A'
-  OR "overallDeliveryStatus" = ''
-  OR "overallDeliveryStatus" IS NULL)
-LIMIT 50
+1. Sales orders delivered but not billed:
+SELECT 
+  soh."salesOrder",
+  soh."soldToParty",
+  soh."totalNetAmount",
+  soh."overallDeliveryStatus",
+  soh."overallOrdReltdBillgStatus",
+  bp."businessPartnerName"
+FROM sales_order_headers soh
+LEFT JOIN business_partners bp 
+  ON soh."soldToParty" = bp."businessPartner"
+WHERE soh."overallDeliveryStatus" = 'C'
+AND (soh."overallOrdReltdBillgStatus" = ''
+  OR soh."overallOrdReltdBillgStatus" IS NULL)
+ORDER BY soh."totalNetAmount" DESC
+LIMIT 20
 
-3. Cancelled billing documents:
-SELECT "billingDocument", "cancelledBillingDocument",
-"totalNetAmount", "soldToParty"
-FROM billing_document_headers
-WHERE "billingDocumentIsCancelled" = 'true'
-LIMIT 50
+2. Cancelled billing documents (revenue reversal risk):
+SELECT 
+  bdh."billingDocument",
+  bdh."cancelledBillingDocument",
+  bdh."totalNetAmount",
+  bdh."soldToParty",
+  bp."businessPartnerName"
+FROM billing_document_headers bdh
+LEFT JOIN business_partners bp
+  ON bdh."soldToParty" = bp."businessPartner"
+WHERE bdh."billingDocumentIsCancelled" = 'true'
+ORDER BY bdh."totalNetAmount" DESC
+LIMIT 20
 
-When user asks about broken, incomplete, or 
-missing flows — always use pattern 1 or 2 above,
-NOT a query that returns all orders.
+3. Orders not yet started:
+SELECT 
+  soh."salesOrder",
+  soh."soldToParty",
+  soh."totalNetAmount",
+  bp."businessPartnerName"
+FROM sales_order_headers soh
+LEFT JOIN business_partners bp
+  ON soh."soldToParty" = bp."businessPartner"  
+WHERE soh."overallDeliveryStatus" = 'A'
+AND soh."overallOrdReltdBillgStatus" = ''
+LIMIT 20
+
+When user asks about broken, incomplete, anomalous, 
+or missing flows — use query 1 above and mention 
+that all delivered orders are missing billing records,
+which is a significant process gap.
 
 CRITICAL SQL RULES — violations will cause runtime errors:
 0. Every camelCase identifier must be double-quoted. No exceptions.
@@ -399,7 +420,27 @@ export async function handleChat(userMessage, history, client) {
     // Extracted later
     const limitedResults = results.slice(0, 50);
 
-    const followUpMessage = `The SQL query returned ${results.length} rows. Here are the results:
+    const followUpMessage = `CRITICAL CONTEXT: This is an ERP anomaly detection 
+system. When query results show orders where 
+overallOrdReltdBillgStatus is empty or null despite 
+delivery being complete (overallDeliveryStatus = 'C'), 
+this is NOT positive — it means billing was never 
+generated for delivered goods. This is a serious 
+process gap that means revenue has not been captured.
+
+Frame your answer accordingly:
+- If results show delivered-but-not-billed orders: 
+  flag this as a process breakdown
+- If results show cancelled billing docs: 
+  flag as revenue reversal risk  
+- If results show incomplete flows: 
+  quantify the financial exposure
+
+Do NOT say things like 'strong performance' or 
+'meeting customer demand' when analyzing broken flows.
+Be direct about the business risk.
+
+The SQL query returned ${results.length} rows. Here are the results:
 ${String(JSON.stringify(limitedResults, null, 0))}
 
 Write a clear, business-friendly answer in 3-4 sentences.
@@ -545,7 +586,27 @@ export async function handleChatStream(userMessage, history, client, onToken, on
 
     const limitedResults = results.slice(0, 50);
 
-    const followUpMessage = `The SQL query returned ${results.length} rows. Here are the results:
+    const followUpMessage = `CRITICAL CONTEXT: This is an ERP anomaly detection 
+system. When query results show orders where 
+overallOrdReltdBillgStatus is empty or null despite 
+delivery being complete (overallDeliveryStatus = 'C'), 
+this is NOT positive — it means billing was never 
+generated for delivered goods. This is a serious 
+process gap that means revenue has not been captured.
+
+Frame your answer accordingly:
+- If results show delivered-but-not-billed orders: 
+  flag this as a process breakdown
+- If results show cancelled billing docs: 
+  flag as revenue reversal risk  
+- If results show incomplete flows: 
+  quantify the financial exposure
+
+Do NOT say things like 'strong performance' or 
+'meeting customer demand' when analyzing broken flows.
+Be direct about the business risk.
+
+The SQL query returned ${results.length} rows. Here are the results:
 ${String(JSON.stringify(limitedResults, null, 0))}
 
 Write a clear, business-friendly answer in 3-4 sentences.
