@@ -321,22 +321,49 @@ export async function handleChat(userMessage, history, client) {
     console.log('Executing SQL:', singleSQL);
 
     const queryResult = await client.query(singleSQL);
-    const results = queryResult.rows || [];
+    let results = queryResult.rows || [];
     console.log(`Query returned ${results.length} rows`);
+
+    // Fetch product names for any material codes in results
+    const materialIds = results
+      .map(r => r.material)
+      .filter(Boolean);
+
+    if (materialIds.length > 0) {
+      const namesResult = await client.query(
+        `SELECT pd."product", pd."productDescription" 
+         FROM product_descriptions pd 
+         WHERE pd."product" = ANY($1) 
+         AND pd."language" = 'EN'`,
+        [materialIds]
+      );
+      const nameMap = {};
+      namesResult.rows.forEach(r => {
+        nameMap[r.product] = r.productDescription;
+      });
+
+      // Enrich results with product names
+      results = results.map(r => ({
+        ...r,
+        productName: r.material
+          ? (nameMap[r.material] || r.material)
+          : undefined
+      }));
+    }
 
     // Extracted later
     const limitedResults = results.slice(0, 50);
 
     const followUpMessage = `The SQL query returned ${results.length} rows. Here are the results:
-${String(JSON.stringify(limitedResults))}
-Based on these actual results, write a clear 2-3 sentence business-friendly answer. Be specific with numbers and names. 
-At the end of your answer, add a line:
-ENTITY_IDS: [comma separated list of all entity IDs mentioned, including salesOrder, billingDocument, deliveryDocument, accountingDocument, businessPartner, product, plant, customer IDs]
+${String(JSON.stringify(limitedResults, null, 0))}
 
-Example:
-ENTITY_IDS: 90504243, 9400000244, 740556, 80738099
-
-Respond directly with the text of your answer, do not use JSON.`;
+Write a clear, business-friendly answer in 3-4 sentences.
+- Use product names (productName field) not material codes
+- Include specific numbers and counts
+- Explain what this means for the business
+- Do NOT mention SQL, tables, or technical terms
+- Do NOT list all items if more than 5, summarize instead
+- At the end add: ENTITY_IDS: [all material/ID values]`;
 
     const followUpCompletion = await groq.chat.completions.create({
       model: model,
@@ -352,7 +379,7 @@ Respond directly with the text of your answer, do not use JSON.`;
     let nodeIds = extractNodeIds(results, answer);
 
     const cleanAnswer = answer
-      .replace(/ENTITY_IDS:.*$/m, '')
+      .replace(/ENTITY_IDS:[\s\S]*$/m, '')
       .trim();
 
     return {
@@ -436,21 +463,48 @@ export async function handleChatStream(userMessage, history, client, onToken, on
     if (onSql) onSql(singleSQL);
 
     const queryResult = await client.query(singleSQL);
-    const results = queryResult.rows || [];
+    let results = queryResult.rows || [];
     console.log(`Query returned ${results.length} rows`);
+
+    // Fetch product names for any material codes in results
+    const materialIds = results
+      .map(r => r.material)
+      .filter(Boolean);
+
+    if (materialIds.length > 0) {
+      const namesResult = await client.query(
+        `SELECT pd."product", pd."productDescription" 
+         FROM product_descriptions pd 
+         WHERE pd."product" = ANY($1) 
+         AND pd."language" = 'EN'`,
+        [materialIds]
+      );
+      const nameMap = {};
+      namesResult.rows.forEach(r => {
+        nameMap[r.product] = r.productDescription;
+      });
+
+      // Enrich results with product names
+      results = results.map(r => ({
+        ...r,
+        productName: r.material
+          ? (nameMap[r.material] || r.material)
+          : undefined
+      }));
+    }
 
     const limitedResults = results.slice(0, 50);
 
     const followUpMessage = `The SQL query returned ${results.length} rows. Here are the results:
-${String(JSON.stringify(limitedResults))}
-Based on these actual results, write a clear 2-3 sentence business-friendly answer. Be specific with numbers and names. 
-At the end of your answer, add a line:
-ENTITY_IDS: [comma separated list of all entity IDs mentioned, including salesOrder, billingDocument, deliveryDocument, accountingDocument, businessPartner, product, plant, customer IDs]
+${String(JSON.stringify(limitedResults, null, 0))}
 
-Example:
-ENTITY_IDS: 90504243, 9400000244, 740556, 80738099
-
-Respond directly with the text of your answer, do not use JSON.`;
+Write a clear, business-friendly answer in 3-4 sentences.
+- Use product names (productName field) not material codes
+- Include specific numbers and counts
+- Explain what this means for the business
+- Do NOT mention SQL, tables, or technical terms
+- Do NOT list all items if more than 5, summarize instead
+- At the end add: ENTITY_IDS: [all material/ID values]`;
 
     const stream = await groq.chat.completions.create({
       model: model,
@@ -475,7 +529,7 @@ Respond directly with the text of your answer, do not use JSON.`;
     let nodeIds = extractNodeIds(results, fullAnswer);
 
     const cleanAnswer = fullAnswer
-      .replace(/ENTITY_IDS:.*$/m, '')
+      .replace(/ENTITY_IDS:[\s\S]*$/m, '')
       .trim();
 
     return {
