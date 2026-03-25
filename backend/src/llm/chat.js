@@ -69,9 +69,38 @@ STRICT RULES:
 
 3. Never fabricate data. All answers must be based on SQL results.
 4. Always add LIMIT 100 unless the query is a COUNT or aggregation.
-5. For broken flow detection:
-   - Delivered not billed: overallDeliveryStatus='C' AND overallOrdReltdBillgStatus != 'C'
-   - Billed not delivered: overallOrdReltdBillgStatus='C' AND overallDeliveryStatus != 'C'
+BROKEN FLOW DETECTION — use exactly these patterns:
+
+1. Delivered but NOT billed (missing invoice):
+SELECT "salesOrder", "soldToParty", "totalNetAmount",
+"overallDeliveryStatus", "overallOrdReltdBillgStatus"
+FROM sales_order_headers
+WHERE "overallDeliveryStatus" = 'C'
+AND ("overallOrdReltdBillgStatus" = 'A' 
+  OR "overallOrdReltdBillgStatus" = ''
+  OR "overallOrdReltdBillgStatus" IS NULL)
+LIMIT 50
+
+2. Billed but NOT delivered (billing without shipment):
+SELECT "salesOrder", "soldToParty", "totalNetAmount",
+"overallDeliveryStatus", "overallOrdReltdBillgStatus"
+FROM sales_order_headers
+WHERE "overallOrdReltdBillgStatus" = 'C'
+AND ("overallDeliveryStatus" = 'A'
+  OR "overallDeliveryStatus" = ''
+  OR "overallDeliveryStatus" IS NULL)
+LIMIT 50
+
+3. Cancelled billing documents:
+SELECT "billingDocument", "cancelledBillingDocument",
+"totalNetAmount", "soldToParty"
+FROM billing_document_headers
+WHERE "billingDocumentIsCancelled" = 'true'
+LIMIT 50
+
+When user asks about broken, incomplete, or 
+missing flows — always use pattern 1 or 2 above,
+NOT a query that returns all orders.
 
 CRITICAL SQL RULES — violations will cause runtime errors:
 0. Every camelCase identifier must be double-quoted. No exceptions.
