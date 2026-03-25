@@ -1,3 +1,4 @@
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import dotenv from 'dotenv';

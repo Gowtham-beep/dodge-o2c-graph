@@ -11,7 +11,8 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 const pool = new pg.Pool({
-    connectionString: process.env.DATABASE_URL
+    connectionString: process.env.DATABASE_URL,
+    ...(process.env.DATABASE_URL && { ssl: { rejectUnauthorized: false } })
 });
 
 let graphCache = {

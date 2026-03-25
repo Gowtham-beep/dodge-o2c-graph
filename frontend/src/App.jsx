@@ -97,7 +97,7 @@ function App() {
   useEffect(() => {
     const fetchGraph = async () => {
       try {
-        const res = await axios.get('http://localhost:3001/api/graph');
+        const res = await axios.get(`${import.meta.env.VITE_API_BASE_URL}/api/graph`);
         setGraphData(res.data);
         setIsLoading(false);
         setShowToast(true);
@@ -341,31 +341,28 @@ function App() {
                   >
                     ✕ Clear highlights ({highlightedNodeIds.length})
                   </button>
+                  {expandedNodeId && (
+                    <button onClick={() => setExpandedNodeId(null)}
+                      style={{
+                        padding: '6px 12px',
+                        background: '#3B82F6',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: 500,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      ← Show all nodes
+                    </button>
+                  )}
                 </div>
-                {expandedNodeId && (
-                  <button onClick={() => setExpandedNodeId(null)}
-                    style={{
-                      position: 'absolute',
-                      top: 12,
-                      left: 200,
-                      zIndex: 1000,
-                      padding: '6px 12px',
-                      background: '#3B82F6',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '6px',
-                      fontSize: '12px',
-                      fontWeight: 500,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-                    }}
-                  >
-                    ← Show all nodes
-                  </button>
-                )}
                 <GraphView
                   ref={graphRef}
                   nodes={displayNodes}
