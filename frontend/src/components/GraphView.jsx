@@ -232,7 +232,8 @@ const CustomNode = ({ data, id, selected }) => {
                             color: '#94a3b8',
                             textAlign: 'left'
                         }}>
-                            Click to analyze in chat
+                            <div style={{ marginBottom: '2px' }}>Click to analyze in chat</div>
+                            <div>Double-click to expand neighbors</div>
                         </div>
                     )}
                 </div>,
@@ -258,6 +259,7 @@ const CustomEdge = ({
     if (isHighlighted) opacity = 1;
     else if (anyHighlighted) opacity = 0.1;
     if (hovered) opacity = 1;
+    if (style?.opacity !== undefined) opacity = style.opacity;
 
     let stroke = style?.stroke || '#e2e8f0';
     if (isHighlighted) stroke = '#F59E0B';
@@ -328,7 +330,7 @@ const edgeTypes = {
     custom: CustomEdge,
 };
 
-const GraphViewInner = forwardRef(({ nodes, edges, onNodesChange, highlightedNodeIds, granularOverlay, onNodeClick }, ref) => {
+const GraphViewInner = forwardRef(({ nodes, edges, onNodesChange, highlightedNodeIds, granularOverlay, onNodeClick, onNodeDoubleClick }, ref) => {
     const reactFlowInstance = useReactFlow();
 
     useImperativeHandle(ref, () => ({
@@ -369,6 +371,7 @@ const GraphViewInner = forwardRef(({ nodes, edges, onNodesChange, highlightedNod
                 edges={edges}
                 onNodesChange={onNodesChange}
                 onNodeClick={(_, node) => onNodeClick(node)}
+                onNodeDoubleClick={(_, node) => onNodeDoubleClick?.(node.id)}
                 nodeTypes={nodeTypes}
                 edgeTypes={edgeTypes}
                 fitView={true}

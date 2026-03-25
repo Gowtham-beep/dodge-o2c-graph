@@ -52,6 +52,7 @@ function App() {
   ]);
   const [highlightedNodeIds, setHighlightedNodeIds] = useState([]);
   const [highlightedEdgeIds, setHighlightedEdgeIds] = useState([]);
+  const [expandedNodeId, setExpandedNodeId] = useState(null);
   const [granularOverlay, setGranularOverlay] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -179,6 +180,19 @@ function App() {
     }
   }, [graphData]);
 
+  const handleNodeDoubleClick = useCallback((nodeId) => {
+    setExpandedNodeId(prev => prev === nodeId ? null : nodeId);
+  }, []);
+
+  const getNeighborIds = useCallback((nodeId) => {
+    const neighborIds = new Set([nodeId]);
+    graphData.edges.forEach(e => {
+      if (e.source === nodeId) neighborIds.add(e.target);
+      if (e.target === nodeId) neighborIds.add(e.source);
+    });
+    return [...neighborIds];
+  }, [graphData.edges]);
+
   const handleNodeClick = (node) => {
     if (chatPanelRef.current) {
       chatPanelRef.current.sendMessage(`Tell me about ${node.data.nodeType} ${node.id}`);
@@ -238,6 +252,26 @@ function App() {
           </div>
 
           {!isLoading && !error && (() => {
+            const displayNodes = expandedNodeId
+              ? nodes.map(n => ({
+                  ...n,
+                  style: {
+                    ...n.style,
+                    opacity: getNeighborIds(expandedNodeId).includes(n.id) ? 1 : 0.08
+                  }
+                }))
+              : nodes;
+
+            const displayEdges = expandedNodeId
+              ? enrichedEdges.map(e => ({
+                  ...e,
+                  style: {
+                    ...e.style,
+                    opacity: (e.source === expandedNodeId || e.target === expandedNodeId) ? 1 : 0.05
+                  }
+                }))
+              : enrichedEdges;
+
             return (
               <ReactFlowProvider>
                 <div style={{
@@ -292,15 +326,36 @@ function App() {
                   >
                     ✕ Clear highlights ({highlightedNodeIds.length})
                   </button>
+                  {expandedNodeId && (
+                    <button onClick={() => setExpandedNodeId(null)}
+                      style={{
+                        padding: '6px 12px',
+                        background: '#3B82F6',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: 500,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+                      }}
+                    >
+                      ← Show all nodes
+                    </button>
+                  )}
                 </div>
                 <GraphView
                   ref={graphRef}
-                  nodes={nodes}
-                  edges={enrichedEdges}
+                  nodes={displayNodes}
+                  edges={displayEdges}
                   onNodesChange={onNodesChange}
                   highlightedNodeIds={highlightedNodeIds}
                   granularOverlay={granularOverlay}
                   onNodeClick={handleNodeClick}
+                  onNodeDoubleClick={handleNodeDoubleClick}
                 />
               </ReactFlowProvider>
             );
