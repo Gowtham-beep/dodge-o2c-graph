@@ -159,7 +159,34 @@ No nested JSON strings — if the answer contains quotes, escape them properly.
 The sql field must be a single-line string with no line breaks inside it.
 `;
 
-function extractNodeIds(results, answerText) {
+function stripEntityIds(text) {
+  if (!text) return text
+  const marker = 'ENTITY_IDS:'
+  const idx = text.indexOf(marker)
+  if (idx !== -1) {
+    return text.substring(0, idx).trim()
+  }
+  return text.trim()
+}
+
+function extractEntityIds(text) {
+  if (!text) return []
+  const marker = 'ENTITY_IDS:'
+  const idx = text.indexOf(marker)
+  if (idx === -1) return []
+
+  const fullSection = text.substring(idx + marker.length)
+  const lineEnd = fullSection.indexOf('\n')
+  const idsSection = lineEnd !== -1 ? fullSection.substring(0, lineEnd) : fullSection
+
+  return idsSection
+    .replace(/[\[\]]/g, '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(s => s.length > 0)
+}
+
+function extractNodeIds(results) {
   const ids = new Set()
 
   // Extract from SQL results
@@ -191,17 +218,6 @@ function extractNodeIds(results, answerText) {
       }
     })
   })
-
-  // Extract ENTITY_IDS line from answer text
-  if (answerText) {
-    const match = answerText.match(/ENTITY_IDS:\s*([^\n]+)/)
-    if (match) {
-      match[1].split(',').forEach(id => {
-        const trimmed = id.trim()
-        if (trimmed) ids.add(trimmed)
-      })
-    }
-  }
 
   return [...ids]
 }
@@ -376,17 +392,22 @@ Write a clear, business-friendly answer in 3-4 sentences.
 
     const answer = followUpCompletion.choices[0].message.content;
 
-    let nodeIds = extractNodeIds(results, answer);
+    const entityIdsFromText = extractEntityIds(answer);
+    const cleanAnswer = stripEntityIds(answer);
 
-    const cleanAnswer = answer
-      .replace(/ENTITY_IDS:[\s\S]*$/m, '')
-      .trim();
+    console.log('Clean answer preview:', cleanAnswer.substring(0, 100));
+    console.log('Entity IDs found:', entityIdsFromText.length);
+
+    const allNodeIds = [
+      ...extractNodeIds(results),
+      ...entityIdsFromText
+    ];
 
     return {
       sql: parsed.sql,
       answer: cleanAnswer,
       results: results,
-      nodeIds: nodeIds
+      nodeIds: allNodeIds
     };
 
   } catch (err) {
@@ -522,21 +543,30 @@ Write a clear, business-friendly answer in 3-4 sentences.
       const token = chunk.choices[0]?.delta?.content || '';
       if (token) {
         fullAnswer += token;
-        onToken(token);
+        // Don't stream tokens yet - buffer first
       }
     }
 
-    let nodeIds = extractNodeIds(results, fullAnswer);
+    const entityIdsFromText = extractEntityIds(fullAnswer);
+    const cleanAnswer = stripEntityIds(fullAnswer);
 
-    const cleanAnswer = fullAnswer
-      .replace(/ENTITY_IDS:[\s\S]*$/m, '')
-      .trim();
+    // Now send the clean answer as a single token
+    // (streaming effect is less important than clean output)
+    onToken(cleanAnswer);
+
+    console.log('Clean answer preview:', cleanAnswer.substring(0, 100));
+    console.log('Entity IDs found:', entityIdsFromText.length);
+
+    const allNodeIds = [
+      ...extractNodeIds(results),
+      ...entityIdsFromText
+    ];
 
     return {
       sql: parsed.sql,
       answer: cleanAnswer,
       results: results,
-      nodeIds: nodeIds
+      nodeIds: allNodeIds
     };
 
   } catch (err) {
