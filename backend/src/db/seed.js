@@ -1,9 +1,19 @@
-require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
-const { Client } = require('pg');
-const fs = require('fs');
-const path = require('path');
-const readline = require('readline');
-const os = require('os');
+import dotenv from 'dotenv';
+import pg from 'pg';
+import fs from 'fs';
+import path from 'path';
+import readline from 'readline';
+import os from 'os';
+import { fileURLToPath } from 'url';
+
+const { Client } = pg;
+
+// 1. Recreate __dirname for ES Modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// 2. Configure dotenv
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 const DATA_DIR = path.join(os.homedir(), 'Downloads/sap-order-to-cash-dataset/sap-o2c-data');
 
@@ -50,7 +60,6 @@ async function insertBatch(client, table, columns, batch) {
 
     const values = batch.flatMap(row => columns.map(col => row[col]));
 
-    // Quotes are used around column names to preserve camelCase names from the JSON during insertion
     const query = `
     INSERT INTO ${table} (${columns.map(c => `"${c}"`).join(', ')})
     VALUES ${placeholders}
@@ -73,7 +82,6 @@ async function seedTable(client, folderName, tableName) {
     console.log(`Seeding ${tableName}...`);
     let totalInserted = 0;
 
-    // Fetch the actual column names from the database for this table
     const colRes = await client.query('SELECT column_name FROM information_schema.columns WHERE table_schema = \'public\' AND table_name = $1', [tableName]);
     if (colRes.rows.length === 0) {
         console.warn(`Table ${tableName} does not exist or has no columns.`);
