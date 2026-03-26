@@ -11,7 +11,13 @@ const fastify = Fastify({
 });
 
 fastify.register(cors, {
-    origin: '*'
+    origin: [
+        'http://localhost:5173',
+        'http://localhost:3000',
+        'https://dodge-o2c-graph.vercel.app',
+        /\.vercel\.app$/
+    ],
+    methods: ['GET', 'POST', 'OPTIONS']
 });
 
 fastify.register(apiRoutes);
@@ -30,5 +36,18 @@ const start = async () => {
         process.exit(1);
     }
 };
+
+// Keep-alive for Render free tier
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
+if (RENDER_URL) {
+    setInterval(async () => {
+        try {
+            await fetch(`${RENDER_URL}/health`);
+            console.log('Keep-alive ping sent');
+        } catch (err) {
+            console.error('Keep-alive ping failed:', err.message);
+        }
+    }, 14 * 60 * 1000); // 14 mins
+}
 
 start();
