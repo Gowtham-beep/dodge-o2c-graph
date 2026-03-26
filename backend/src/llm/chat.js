@@ -73,8 +73,13 @@ STRICT RULES:
 2. For dataset questions respond ONLY with valid JSON:
    {"sql": "SELECT ...", "answer": "Brief explanation of what the query does"}
 
-3. Never fabricate data. All answers must be based on SQL results.
-4. Always add LIMIT 100 unless the query is a COUNT or aggregation.
+3. RULE: Only generate SELECT queries. Never generate
+   DROP, DELETE, UPDATE, INSERT, ALTER, or TRUNCATE.
+   If asked to modify data, respond with the guardrail
+   message.
+
+4. Never fabricate data. All answers must be based on SQL results.
+5. Always add LIMIT 100 unless the query is a COUNT or aggregation.
 BROKEN FLOW DETECTION — use exactly these queries:
 
 IMPORTANT: In this dataset, overallOrdReltdBillgStatus 
@@ -295,6 +300,12 @@ function sanitizeSQL(sql) {
   return fixed;
 }
 
+function isDangerousSQL(sql) {
+  if (!sql) return false;
+  const dangerous = /\b(DROP|DELETE|UPDATE|INSERT|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|EXEC|EXECUTE)\b/i;
+  return dangerous.test(sql);
+}
+
 function parseJSON(text) {
   // Step 1: Remove markdown fences
   let cleaned = text
@@ -390,6 +401,16 @@ export async function handleChat(userMessage, history, client) {
     const sanitizedSQL = sanitizeSQL(parsed.sql);
     const singleSQL = extractFirstStatement(sanitizedSQL);
     console.log('Executing SQL:', singleSQL);
+
+    if (isDangerousSQL(singleSQL)) {
+      console.warn('Dangerous SQL blocked:', singleSQL);
+      return {
+        sql: singleSQL,
+        answer: "This system only supports read queries on the O2C dataset. Write operations are not permitted.",
+        results: [],
+        nodeIds: []
+      };
+    }
 
     const queryResult = await client.query(singleSQL);
     let results = queryResult.rows || [];
@@ -555,6 +576,18 @@ export async function handleChatStream(userMessage, history, client, onToken, on
     const sanitizedSQL = sanitizeSQL(parsed.sql);
     const singleSQL = extractFirstStatement(sanitizedSQL);
     console.log('Executing SQL:', singleSQL);
+
+    if (isDangerousSQL(singleSQL)) {
+      console.warn('Dangerous SQL blocked:', singleSQL);
+      const safeResponse = {
+        sql: singleSQL,
+        answer: "This system only supports read queries on the O2C dataset. Write operations are not permitted.",
+        results: [],
+        nodeIds: []
+      };
+      if (typeof onToken === 'function') onToken(safeResponse.answer);
+      return safeResponse;
+    }
 
     if (onSql) onSql(singleSQL);
 
