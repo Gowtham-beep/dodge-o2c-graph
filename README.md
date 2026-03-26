@@ -381,3 +381,33 @@ dodge-o2c-graph/
 ```
 
 The `/ai-session-logs/` directory contains full session transcripts — architecture planning with Claude, implementation sessions in the Antigravity IDE. Included for transparency on process and iteration.
+
+---
+
+## Post-Submission Update: Resolving Context Bleed
+
+*Note: I submitted the initial version of this project early. In the remaining time before the deadline, I identified and resolved an issue with query interpretation.*
+
+### The Problem
+Queries requesting simple product rankings (e.g., *"Which products have the most billing documents?"*) were being incorrectly framed in the final output. While the generated SQL was perfectly accurate, the final LLM synthesis interpreted the results through the lens of a process breakdown rather than a simple ranking.
+
+### The Root Cause
+The follow-up interpretation prompt (Pass 2) lacked awareness of the user's original intent. All queries were being funneled through the same rigid set of instructions, which were heavily biased toward anomaly detection and process gap analysis.
+
+### The Fix: Zero-Shot Intent Classification
+To eliminate this context bleed, I introduced a pre-processing step using a zero-shot intent classifier before the SQL generation phase. Queries are now categorized into one of five distinct intents:
+
+- `PRODUCT_ANALYSIS`: Rank products by count, analyze demand insights.
+- `FLOW_TRACE`: Trace specific documents through the O2C chain.
+- `ANOMALY_DETECTION`: Flag process gaps and quantify revenue exposure.
+- `ENTITY_LOOKUP`: Retrieve specific entity details.
+- `GENERAL_ANALYSIS`: Default fallback for general O2C domain questions.
+
+This intent classification is now passed to both Pass 1 (SQL Generation) and Pass 2 (Result Interpretation), ensuring the prompt instructions dynamically adapt to the specific type of query.
+
+### The Result
+Routing the queries through specific intent lenses completely eliminated the context bleed.
+
+> **❌ Before (Context Bleed):** *"Critical process breakdown: 10 orders delivered but not billed."* (Incorrect framing for a ranking query).
+>
+> **✅ After (Intent-Aware):** *"FACESERUM 30ML VIT C and SUNSCREEN GEL SPF50-PA+++ 50ML lead with 22 billing documents each, indicating strong demand for skincare products."* (Accurate, contextually appropriate).
