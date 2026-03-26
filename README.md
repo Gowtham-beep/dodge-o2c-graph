@@ -21,21 +21,197 @@ Ingests a SAP Order-to-Cash JSONL dataset (20 tables), models it as a graph of i
 
 ## Architecture
 
+### Full Data Flow
+
 ```
-JSONL Dataset → PostgreSQL → Fastify API → React Frontend
-                                ├── /api/graph  (FK-derived graph)
-                                └── /api/chat   (NL → SQL → answer)
+JSONL files (20 tables)
+       │
+       ▼
+  seed.js ──► PostgreSQL on Aiven (source of truth)
+                     │
+           ┌─────────┼─────────┐
+           │                   │
+           ▼                   ▼
+     GET /api/graph       POST /api/chat
+           │                   │
+    buildGraph.js         chat.js
+    (8 parallel           │
+     node queries    ┌────┴─────────────┐
+     + 7 edge        │                  │
+     queries,        ▼                  │
+     FK-derived)  Pass 1: LLM           │
+           │      SQL generation        │
+           │         │                  │
+           ▼         ▼                  │
+    { nodes[], }  sanitizeSQL()         │
+      edges[] }   + extractFirst-       │
+           │        Statement()         │
+           │         │                  │
+           │         ▼                  │
+           │    pg.query(sql)           │
+           │         │                  │
+           │         ▼                  │
+           │    Pass 2: LLM             │
+           │    result interpretation   │
+           │    + product name JOIN     │
+           │         │                  │
+           │         ▼                  │
+           │    buffer full answer      │
+           │    → stripEntityIds()      │
+           │    → extractEntityIds()    │
+           │    → onToken(cleanAnswer)  │
+           │         │                  │
+           ▼         ▼                  │
+      React Flow  ChatPanel          nodeIds[]
+      (GraphView)  (streaming)     → highlight
+                                    graph nodes
 ```
 
-**Stack:**
+---
 
-| Layer | Choice | Why |
+### Layer 1 — Data Ingestion (`seed.js`)
+
+The seed script reads each JSONL file and bulk-inserts rows into PostgreSQL using `COPY FROM STDIN` with per-table schema definitions. Column names are preserved exactly as-is (camelCase SAP naming convention), which is why quoting becomes critical at query time. The schema enforces FK relationships that the graph layer later traverses.
+
+---
+
+### Layer 2 — Graph Construction (`buildGraph.js`)
+
+Called on every `GET /api/graph` request. Runs **15 parallel SQL queries** — 8 for nodes, 7 for edges:
+
+**Node queries** (each capped at 150 rows for UI performance):
+
+| Node Type | Source | Label field |
 |---|---|---|
-| Backend | Fastify + Node.js | Lightweight, fast, schema validation built in |
-| Database | PostgreSQL (Aiven) | Relational data with clear FKs — right tool for the job |
+| SalesOrder | `sales_order_headers` | `salesOrder` ID |
+| BusinessPartner | `business_partners` | `businessPartnerName` |
+| OutboundDelivery | `outbound_delivery_headers` | `deliveryDocument` ID |
+| BillingDocument | `billing_document_headers` | `billingDocument` ID |
+| JournalEntry | `journal_entry_items` | `accountingDocument` ID |
+| Payment | `payments` | `accountingDocument` + `_PAY` suffix |
+| Product | `products` JOIN `product_descriptions` | `productDescription` (EN) |
+| Plant | `plants` | `plantName` |
+
+Payment nodes use a composite key (`accountingDocument || '_PAY'`) to avoid ID collisions with JournalEntry nodes, which use the same `accountingDocument` field.
+
+**Edge queries** (each capped at 300 rows):
+
+| Edge | SQL pattern |
+|---|---|
+| SOLD_TO | `sales_order_headers.soldToParty → salesOrder` |
+| DELIVERED_BY | `outbound_delivery_items.referenceSdDocument → deliveryDocument` |
+| BILLED_AS | `billing_document_items.referenceSdDocument → billingDocument` |
+| POSTED_TO | `billing_document_headers.billingDocument → accountingDocument` |
+| CLEARED_BY | `payments.invoiceReference → accountingDocument_PAY` |
+| CONTAINS | `sales_order_items.salesOrder → material` |
+| SHIPPED_FROM | `outbound_delivery_items.deliveryDocument → plant` |
+
+**Edge filtering:** After both sets are fetched, edges are filtered to only include rows where both `source` and `target` IDs exist in the node set. This prevents React Flow from rendering dangling edges that cause rendering errors.
+
+---
+
+### Layer 3 — Chat Pipeline (`chat.js`)
+
+Two Groq API calls, one PostgreSQL query:
+
+#### Pass 1 — SQL Generation
+
+```
+System prompt
+  ├── Full schema (14 tables, all column names)
+  ├── 6 explicit FK join patterns
+  ├── Status code mappings (A/B/C)
+  ├── 3 hardcoded broken-flow query templates
+  ├── Domain guardrail instruction
+  └── Strict response format: { "sql": "...", "answer": "..." }
+
++ Conversation history (last N messages, alternating roles,
+  validated to satisfy Groq's strict role-alternation requirement)
+
+→ LLM output: JSON with sql + answer fields
+→ parseJSON(): strips markdown fences, extracts first {} block,
+  falls back to plain-answer if unparseable
+```
+
+#### SQL Sanitization (between Pass 1 and execution)
+
+```
+sanitizeSQL()
+  → regex: any camelCase word not already double-quoted
+    gets wrapped in double quotes
+  → prevents PostgreSQL lowercasing camelCase identifiers
+
+extractFirstStatement()
+  → split on semicolons, take first non-empty statement
+  → prevents multi-statement injection
+```
+
+#### PostgreSQL Execution
+
+```
+pg.query(sanitizedSQL)
+  → results (up to 50 rows)
+  → product name enrichment:
+      if any result row has a `material` field,
+      JOIN product_descriptions to add `productName`
+      (so Pass 2 sees names, not material codes)
+```
+
+#### Pass 2 — Result Interpretation
+
+```
+System prompt: "You are a business data analyst."
+
+User message:
+  ├── Business framing context
+  │   (anomaly = risk, not performance; quantify exposure)
+  ├── JSON.stringify(results, first 50 rows)
+  └── Output instructions:
+        use productName, include counts,
+        no SQL/table mentions,
+        append: ENTITY_IDS: [id1, id2, ...]
+
+→ LLM output: buffered in full (not streamed token-by-token)
+
+Post-processing:
+  extractEntityIds() → finds ENTITY_IDS: [...] marker, parses IDs
+  stripEntityIds()   → removes marker from display text
+  extractNodeIds()   → scans all result rows for known ID fields
+                       to catch IDs the LLM didn't explicitly list
+
+→ onToken(cleanAnswer) — sends stripped answer to frontend
+→ returns { sql, answer, results, nodeIds: union of both ID sets }
+```
+
+**Why buffer instead of true streaming?** The `ENTITY_IDS:` marker appears at the end of the LLM response. Stripping it requires seeing the full output first. Streaming token-by-token would require holding a buffer anyway, so the "streaming" effect is simulated by sending the clean answer as a single `onToken` call after processing.
+
+---
+
+### Layer 4 — Frontend (`GraphView.jsx` + `ChatPanel.jsx`)
+
+**Graph rendering:**
+- React Flow renders nodes with a custom `CustomNode` component (color-coded by type, hover tooltip with full metadata)
+- Force-directed layout positions nodes on load; user can drag freely after
+- On chat response, `nodeIds` from the API are matched against the graph node set — matching nodes get an amber glow style and their edges become animated dashed lines
+- Double-click a node: graph filters to only that node + its direct neighbors, with edge labels shown
+
+**Chat panel:**
+- Each message rendered with a collapsible SQL block (the raw query used)
+- Blinking cursor shown while `isStreaming` state is true
+- History sent with each request (last 8 messages), SQL annotations stripped before sending
+
+---
+
+### Stack
+
+| Layer | Technology | Reason |
+|---|---|---|
+| Backend | Fastify + Node.js | Lightweight, schema validation, fast startup |
+| Database | PostgreSQL (Aiven) | Relational integrity, standard SQL for LLM generation |
 | LLM | Groq LLaMA 3.3 70B | Free tier, fast inference, strong SQL generation |
-| Frontend | React + Vite + React Flow | Component model, interactive graph rendering |
-| Deploy | Render + Vercel | Free tier, zero-config CI/CD |
+| Frontend | React + Vite | Fast dev cycle, component model |
+| Graph Viz | React Flow | Interactive nodes/edges, custom rendering, animated edges |
+| Deployment | Render + Vercel | Free tier, zero-config CI/CD |
 
 ---
 
