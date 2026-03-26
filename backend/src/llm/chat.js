@@ -342,12 +342,83 @@ function extractFirstStatement(sql) {
   return statements[0];
 }
 
+const INTENT_SYSTEM_PROMPT = `You are an intent classifier for a SAP Order-to-Cash query system.
+
+Classify the user query into exactly one of:
+- PRODUCT_ANALYSIS: questions about products, materials, billing counts, product performance
+- FLOW_TRACE: tracing a specific document through the O2C flow
+- ANOMALY_DETECTION: broken flows, incomplete orders, missing billing, cancelled documents
+- ENTITY_LOOKUP: looking up details about a specific entity by ID
+- GENERAL_ANALYSIS: other O2C domain questions
+
+Respond with ONLY the intent label. Nothing else.`;
+
+function getIntentInstructions(intent) {
+  switch (intent) {
+    case 'PRODUCT_ANALYSIS':
+      return `
+CURRENT QUERY TYPE: PRODUCT_ANALYSIS
+Focus: product/material counts and rankings.
+Use billing_document_items.material for counts.
+DO NOT mention broken flows or billing gaps.
+Query pattern:
+SELECT "material", COUNT("billingDocument") as count
+FROM billing_document_items
+GROUP BY "material"
+ORDER BY count DESC LIMIT 10`;
+
+    case 'FLOW_TRACE':
+      return `
+CURRENT QUERY TYPE: FLOW_TRACE
+Focus: trace a single document through full O2C chain.
+Use JOINs: SO → Delivery → Billing → Journal → Payment.
+Show the complete journey of this specific document.`;
+
+    case 'ANOMALY_DETECTION':
+      return `
+CURRENT QUERY TYPE: ANOMALY_DETECTION
+Focus: find broken, incomplete, or anomalous flows.
+Use status fields: overallDeliveryStatus, overallOrdReltdBillgStatus.
+Empty string means unprocessed in this dataset.
+Delivered not billed: overallDeliveryStatus='C' AND overallOrdReltdBillgStatus=''.
+Frame findings as business risks with $ exposure.`;
+
+    case 'ENTITY_LOOKUP':
+      return `
+CURRENT QUERY TYPE: ENTITY_LOOKUP
+Focus: retrieve all details about a specific entity.
+Use SELECT * with WHERE clause on the entity ID.
+Include related entities via LEFT JOIN.`;
+
+    default:
+      return `
+CURRENT QUERY TYPE: GENERAL_ANALYSIS
+Focus: answer the specific question asked.
+Do not add unrelated context about broken flows
+or anomalies unless directly relevant.`;
+  }
+}
+
 export async function handleChat(userMessage, history, client) {
   try {
     const groq = getGroqClient();
     const model = 'llama-3.3-70b-versatile';
 
-    let messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+    // STEP 0 — Classify intent
+    const intentResult = await groq.chat.completions.create({
+      model,
+      messages: [
+        { role: 'system', content: INTENT_SYSTEM_PROMPT },
+        { role: 'user', content: userMessage }
+      ],
+      temperature: 0,
+      max_tokens: 20
+    });
+    const intent = intentResult.choices[0].message.content.trim();
+    console.log('Query intent:', intent);
+
+    const intentInstructions = getIntentInstructions(intent);
+    let messages = [{ role: 'system', content: SYSTEM_PROMPT + '\n\n' + intentInstructions }];
 
     if (history && history.length > 0) {
       let mapped = history.map(msg => ({
@@ -521,7 +592,21 @@ export async function handleChatStream(userMessage, history, client, onToken, on
     const groq = getGroqClient();
     const model = 'llama-3.3-70b-versatile';
 
-    let messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+    // STEP 0 — Classify intent
+    const intentResult = await groq.chat.completions.create({
+      model,
+      messages: [
+        { role: 'system', content: INTENT_SYSTEM_PROMPT },
+        { role: 'user', content: userMessage }
+      ],
+      temperature: 0,
+      max_tokens: 20
+    });
+    const intent = intentResult.choices[0].message.content.trim();
+    console.log('Query intent:', intent);
+
+    const intentInstructions = getIntentInstructions(intent);
+    let messages = [{ role: 'system', content: SYSTEM_PROMPT + '\n\n' + intentInstructions }];
 
     if (history && history.length > 0) {
       let mapped = history.map(msg => ({
