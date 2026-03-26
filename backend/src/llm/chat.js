@@ -342,6 +342,54 @@ function extractFirstStatement(sql) {
   return statements[0];
 }
 
+function buildFollowUpPrompt(intent, sql, results, limitedResults) {
+  const baseInstructions = `
+SQL query: ${sql}
+Results (${results.length} rows):
+${JSON.stringify(limitedResults, null, 0)}
+`;
+
+  const intentGuidance = {
+    'PRODUCT_ANALYSIS': `
+Write a 2-3 sentence business answer about product billing performance.
+- Rank the top products by billing document count
+- Use product names (productDescription field) not material codes
+- State the counts clearly
+- Give insight about demand patterns
+- DO NOT mention broken flows, delivery status, or uncaptured revenue
+- This is a RANKING query, not an anomaly query`,
+
+    'FLOW_TRACE': `
+Write a 2-3 sentence answer tracing this document through the O2C flow.
+- Describe the journey: SO → Delivery → Billing → Journal
+- Mention key amounts and dates
+- Flag if any step is missing or cancelled`,
+
+    'ANOMALY_DETECTION': `
+Write a 2-3 sentence answer identifying process gaps.
+- Quantify the number of affected orders
+- Calculate total financial exposure in dollars
+- Frame as business risk requiring attention
+- Be specific about what's missing (billing, delivery etc)`,
+
+    'ENTITY_LOOKUP': `
+Write a 2-3 sentence summary of this entity.
+- State what type of entity it is
+- List the key fields and their values
+- Mention any notable status or flags`,
+
+    'GENERAL_ANALYSIS': `
+Write a 2-3 sentence business-focused answer.
+- Answer exactly what was asked
+- Use business language not technical terms
+- Include specific numbers from the results`
+  };
+
+  const guidance = intentGuidance[intent] || intentGuidance['GENERAL_ANALYSIS'];
+  return baseInstructions + '\n\nINSTRUCTIONS:\n' + guidance
+    + '\n\nAt the end add: ENTITY_IDS: [all relevant IDs from the results]';
+}
+
 const INTENT_SYSTEM_PROMPT = `You are an intent classifier for a SAP Order-to-Cash query system.
 
 Classify the user query into exactly one of:
@@ -517,36 +565,7 @@ export async function handleChat(userMessage, history, client) {
     // Extracted later
     const limitedResults = results.slice(0, 50);
 
-    const followUpMessage = `CRITICAL CONTEXT: This is an ERP anomaly detection 
-system. When query results show orders where 
-overallOrdReltdBillgStatus is empty or null despite 
-delivery being complete (overallDeliveryStatus = 'C'), 
-this is NOT positive — it means billing was never 
-generated for delivered goods. This is a serious 
-process gap that means revenue has not been captured.
-
-Frame your answer accordingly:
-- If results show delivered-but-not-billed orders: 
-  flag this as a process breakdown
-- If results show cancelled billing docs: 
-  flag as revenue reversal risk  
-- If results show incomplete flows: 
-  quantify the financial exposure
-
-Do NOT say things like 'strong performance' or 
-'meeting customer demand' when analyzing broken flows.
-Be direct about the business risk.
-
-The SQL query returned ${results.length} rows. Here are the results:
-${String(JSON.stringify(limitedResults, null, 0))}
-
-Write a clear, business-friendly answer in 3-4 sentences.
-- Use product names (productName field) not material codes
-- Include specific numbers and counts
-- Explain what this means for the business
-- Do NOT mention SQL, tables, or technical terms
-- Do NOT list all items if more than 5, summarize instead
-- At the end add: ENTITY_IDS: [all material/ID values]`;
+    const followUpMessage = buildFollowUpPrompt(intent, singleSQL, results, limitedResults);
 
     const followUpCompletion = await groq.chat.completions.create({
       model: model,
@@ -709,36 +728,7 @@ export async function handleChatStream(userMessage, history, client, onToken, on
 
     const limitedResults = results.slice(0, 50);
 
-    const followUpMessage = `CRITICAL CONTEXT: This is an ERP anomaly detection 
-system. When query results show orders where 
-overallOrdReltdBillgStatus is empty or null despite 
-delivery being complete (overallDeliveryStatus = 'C'), 
-this is NOT positive — it means billing was never 
-generated for delivered goods. This is a serious 
-process gap that means revenue has not been captured.
-
-Frame your answer accordingly:
-- If results show delivered-but-not-billed orders: 
-  flag this as a process breakdown
-- If results show cancelled billing docs: 
-  flag as revenue reversal risk  
-- If results show incomplete flows: 
-  quantify the financial exposure
-
-Do NOT say things like 'strong performance' or 
-'meeting customer demand' when analyzing broken flows.
-Be direct about the business risk.
-
-The SQL query returned ${results.length} rows. Here are the results:
-${String(JSON.stringify(limitedResults, null, 0))}
-
-Write a clear, business-friendly answer in 3-4 sentences.
-- Use product names (productName field) not material codes
-- Include specific numbers and counts
-- Explain what this means for the business
-- Do NOT mention SQL, tables, or technical terms
-- Do NOT list all items if more than 5, summarize instead
-- At the end add: ENTITY_IDS: [all material/ID values]`;
+    const followUpMessage = buildFollowUpPrompt(intent, singleSQL, results, limitedResults);
 
     const stream = await groq.chat.completions.create({
       model: model,
