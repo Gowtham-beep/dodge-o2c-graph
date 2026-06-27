@@ -1,4 +1,25 @@
 import Groq from 'groq-sdk';
+import { pipeline } from '@xenova/transformers';
+import pg from 'pg';
+
+let neonPool = null;
+function getNeonPool() {
+  if (!neonPool && process.env.NEON_DATABASE_URL) {
+    neonPool = new pg.Pool({
+      connectionString: process.env.NEON_DATABASE_URL,
+      ssl: { rejectUnauthorized: false }
+    });
+  }
+  return neonPool;
+}
+
+let extractor = null;
+async function getExtractor() {
+  if (!extractor) {
+    extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+  }
+  return extractor;
+}
 
 function getGroqClient() {
   return new Groq({
@@ -378,6 +399,12 @@ Write a 2-3 sentence summary of this entity.
 - List the key fields and their values
 - Mention any notable status or flags`,
 
+    'SEMANTIC_SEARCH': `
+Write a 2-3 sentence business answer about these matching products.
+- Mention the closest matching product names
+- Do not mention the similarity scores or vector search mechanics
+- Just provide a helpful summary of what was found`,
+
     'GENERAL_ANALYSIS': `
 Write a 2-3 sentence business-focused answer.
 - Answer exactly what was asked
@@ -397,6 +424,7 @@ Classify the user query into exactly one of:
 - FLOW_TRACE: tracing a specific document through the O2C flow
 - ANOMALY_DETECTION: broken flows, incomplete orders, missing billing, cancelled documents
 - ENTITY_LOOKUP: looking up details about a specific entity by ID
+- SEMANTIC_SEARCH: finding products based on descriptions, fuzzy searches, "products similar to X", or vague product queries
 - GENERAL_ANALYSIS: other O2C domain questions
 
 Respond with ONLY the intent label. Nothing else.`;
@@ -438,6 +466,12 @@ Focus: retrieve all details about a specific entity.
 Use SELECT * with WHERE clause on the entity ID.
 Include related entities via LEFT JOIN.`;
 
+    case 'SEMANTIC_SEARCH':
+      return `
+CURRENT QUERY TYPE: SEMANTIC_SEARCH
+Focus: finding products by fuzzy description or similarity.
+(This branch uses vector search; LLM SQL generation is bypassed.)`;
+
     default:
       return `
 CURRENT QUERY TYPE: GENERAL_ANALYSIS
@@ -464,6 +498,51 @@ export async function handleChat(userMessage, history, client) {
     });
     const intent = intentResult.choices[0].message.content.trim();
     console.log('Query intent:', intent);
+
+    if (intent === 'SEMANTIC_SEARCH') {
+      const neon = getNeonPool();
+      if (!neon) {
+        return { sql: null, answer: "Neon DB not configured for vector search.", results: [], nodeIds: [] };
+      }
+      const extract = await getExtractor();
+      const out = await extract(userMessage, { pooling: 'mean', normalize: true });
+      const emb = Array.from(out.data);
+      const embStr = '[' + emb.join(',') + ']';
+      
+      const neonClient = await neon.connect();
+      let results = [];
+      try {
+          const res = await neonClient.query(`
+              SELECT material_id as "material", description as "productDescription", 
+                     1 - (embedding <=> $1::vector) as similarity
+              FROM product_embeddings
+              ORDER BY embedding <=> $1::vector
+              LIMIT 5
+          `, [embStr]);
+          results = res.rows;
+      } finally {
+          neonClient.release();
+      }
+      
+      results = results.map(r => ({ ...r, productName: r.productDescription }));
+      const limitedResults = results;
+      const followUpMessage = buildFollowUpPrompt(intent, 'VECTOR SIMILARITY SEARCH', results, limitedResults);
+      
+      const followUpCompletion = await groq.chat.completions.create({
+          model: model,
+          messages: [
+            { role: 'system', content: 'You are a business data analyst.' },
+            { role: 'user', content: followUpMessage }
+          ],
+          temperature: 0.1,
+      });
+      const answer = followUpCompletion.choices[0].message.content;
+      const entityIdsFromText = extractEntityIds(answer);
+      const cleanAnswer = stripEntityIds(answer);
+      const allNodeIds = [...extractNodeIds(results), ...entityIdsFromText];
+      
+      return { sql: 'VECTOR SIMILARITY SEARCH', answer: cleanAnswer, results, nodeIds: allNodeIds };
+    }
 
     const intentInstructions = getIntentInstructions(intent);
     let messages = [{ role: 'system', content: SYSTEM_PROMPT + '\n\n' + intentInstructions }];
@@ -623,6 +702,64 @@ export async function handleChatStream(userMessage, history, client, onToken, on
     });
     const intent = intentResult.choices[0].message.content.trim();
     console.log('Query intent:', intent);
+
+    if (intent === 'SEMANTIC_SEARCH') {
+      const neon = getNeonPool();
+      if (!neon) {
+        const fallbackAns = "Neon DB not configured for vector search.";
+        if (typeof onToken === 'function') onToken(fallbackAns);
+        return { sql: null, answer: fallbackAns, results: [], nodeIds: [] };
+      }
+      const extract = await getExtractor();
+      const out = await extract(userMessage, { pooling: 'mean', normalize: true });
+      const emb = Array.from(out.data);
+      const embStr = '[' + emb.join(',') + ']';
+      
+      const neonClient = await neon.connect();
+      let results = [];
+      try {
+          const res = await neonClient.query(`
+              SELECT material_id as "material", description as "productDescription", 
+                     1 - (embedding <=> $1::vector) as similarity
+              FROM product_embeddings
+              ORDER BY embedding <=> $1::vector
+              LIMIT 5
+          `, [embStr]);
+          results = res.rows;
+      } finally {
+          neonClient.release();
+      }
+      
+      results = results.map(r => ({ ...r, productName: r.productDescription }));
+      if (onSql) onSql('VECTOR SIMILARITY SEARCH');
+      
+      const limitedResults = results;
+      const followUpMessage = buildFollowUpPrompt(intent, 'VECTOR SIMILARITY SEARCH', results, limitedResults);
+      
+      const stream = await groq.chat.completions.create({
+        model: model,
+        messages: [
+          { role: 'system', content: 'You are a business data analyst.' },
+          { role: 'user', content: followUpMessage }
+        ],
+        temperature: 0.1,
+        max_tokens: 1024,
+        stream: true,
+      });
+
+      let fullAnswer = '';
+      for await (const chunk of stream) {
+        const token = chunk.choices[0]?.delta?.content || '';
+        if (token) fullAnswer += token;
+      }
+
+      const entityIdsFromText = extractEntityIds(fullAnswer);
+      const cleanAnswer = stripEntityIds(fullAnswer);
+      if (typeof onToken === 'function') onToken(cleanAnswer);
+      
+      const allNodeIds = [...extractNodeIds(results), ...entityIdsFromText];
+      return { sql: 'VECTOR SIMILARITY SEARCH', answer: cleanAnswer, results, nodeIds: allNodeIds };
+    }
 
     const intentInstructions = getIntentInstructions(intent);
     let messages = [{ role: 'system', content: SYSTEM_PROMPT + '\n\n' + intentInstructions }];
